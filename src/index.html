@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clave</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<aside class="sidebar">
+    <div class="brand">
+        <span class="brand-mark">C</span>
+        <div>
+            <p class="brand-label">Clave</p>
+            <h1>Coffre privé</h1>
+        </div>
+    </div>
+
+    <nav class="categories" aria-label="Espaces">
+        <p class="section-label">Espaces</p>
+        <ul>
+            <li class="active" tabindex="0">Perso</li>
+        </ul>
+    </nav>
+
+    <button id="add-categorie" type="button" title="Créer un espace">
+        <span>+</span>
+        Créer
+    </button>
+</aside>
+
+<main class="main">
+    <header class="page-header">
+        <div>
+            <p class="eyebrow">Chiffré localement</p>
+            <h2>Perso</h2>
+        </div>
+        <div class="header-meta">
+            <span id="entry-count">0 accès</span>
+            <span class="security-pill">AES-GCM</span>
+        </div>
+    </header>
+
+    <section class="entry-panel" aria-label="Ajouter un accès">
+        <div class="ligne form-row">
+            <label>
+                <span>Service</span>
+                <input type="text" id="plateforme" placeholder="Gmail">
+            </label>
+            <label>
+                <span>Identifiant</span>
+                <input type="text" id="email" placeholder="nom@exemple.com">
+            </label>
+            <label>
+                <span>Secret</span>
+                <span class="secret-field">
+                    <input type="password" id="mdp" placeholder="Mot de passe">
+                    <button class="toggle-secret" type="button" aria-label="Afficher le secret" title="Afficher le secret">
+                        <span class="eye-open">◐</span>
+                    </button>
+                </span>
+            </label>
+            <button id="generer" type="button">Générer</button>
+        </div>
+        <div class="panel-actions">
+            <p>Stockage chiffré dans le dossier local de l'application.</p>
+            <button class="btn-ajouter" type="button">Enregistrer</button>
+        </div>
+    </section>
+
+    <section class="vault-list" aria-label="Accès enregistrés">
+        <div class="list-heading">
+            <p class="section-label">Accès</p>
+        </div>
+        <div id="liste-mdp"></div>
+    </section>
+</main>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<div class="context-menu" id="category-menu" role="menu" aria-hidden="true">
+    <button type="button" id="menu-rename" role="menuitem">
+        <span>✎</span>
+        Renommer
+    </button>
+    <button type="button" id="menu-delete" class="danger" role="menuitem">
+        <span>×</span>
+        Supprimer
+    </button>
+</div>
+
+<div class="modal-backdrop" id="rename-modal" aria-hidden="true">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="rename-title">
+        <p class="eyebrow">Espace</p>
+        <h3 id="rename-title">Renommer</h3>
+        <label class="modal-field">
+            <span>Nouveau nom</span>
+            <input type="text" id="rename-input" autocomplete="off">
+        </label>
+        <div class="modal-actions">
+            <button class="btn-secondary" id="cancel-rename" type="button">Annuler</button>
+            <button class="btn-ajouter" id="confirm-rename" type="button">Valider</button>
+        </div>
+    </section>
+</div>
+
+<div class="modal-backdrop" id="delete-modal" aria-hidden="true">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+        <p class="eyebrow">Suppression</p>
+        <h3 id="delete-title">Supprimer cet espace ?</h3>
+        <p class="modal-copy" id="delete-copy">Les accès de cet espace seront supprimés.</p>
+        <div class="modal-actions">
+            <button class="btn-secondary" id="cancel-delete" type="button">Annuler</button>
+            <button class="btn-danger" id="confirm-delete" type="button">Supprimer</button>
+        </div>
+    </section>
+</div>
+
+<script type="module" src="./script.js"></script>
+</body>
+</html>
