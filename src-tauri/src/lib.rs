@@ -4,11 +4,14 @@ use std::sync::Mutex;
 
 use store::{AuthStatus, CategoryMap, PasswordEntry, PasswordStore};
 use tauri::{AppHandle, Manager, State};
+#[cfg(not(target_os = "macos"))]
 use tauri_plugin_biometry::{
     BiometryExt, DataOptions, GetDataOptions, SetDataOptions, Status as BiometryStatus,
 };
 
+#[cfg(not(target_os = "macos"))]
 const BIOMETRY_DOMAIN: &str = "clave";
+#[cfg(not(target_os = "macos"))]
 const BIOMETRY_MASTER_PASSWORD_NAME: &str = "master-password";
 
 struct AppState {
@@ -24,6 +27,7 @@ struct BiometryUiStatus {
     error: Option<String>,
 }
 
+#[cfg(not(target_os = "macos"))]
 fn biometry_data_options() -> DataOptions {
     DataOptions {
         domain: BIOMETRY_DOMAIN.to_string(),
@@ -31,10 +35,12 @@ fn biometry_data_options() -> DataOptions {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn biometry_type_label(status: &BiometryStatus) -> String {
     format!("{:?}", status.biometry_type)
 }
 
+#[cfg(not(target_os = "macos"))]
 fn map_biometry_status(app: &AppHandle) -> Result<BiometryUiStatus, String> {
     let status = app.biometry().status().map_err(|error| error.to_string())?;
     let is_enabled = app
@@ -60,11 +66,24 @@ fn auth_status(state: State<AppState>) -> Result<AuthStatus, String> {
 }
 
 #[tauri::command]
+#[cfg(not(target_os = "macos"))]
 fn biometrie_status(app: AppHandle) -> Result<BiometryUiStatus, String> {
     map_biometry_status(&app)
 }
 
 #[tauri::command]
+#[cfg(target_os = "macos")]
+fn biometrie_status() -> Result<BiometryUiStatus, String> {
+    Ok(BiometryUiStatus {
+        is_available: false,
+        is_enabled: false,
+        biometry_type: "macOS".to_string(),
+        error: Some("Biometrie desactivee sur macOS.".to_string()),
+    })
+}
+
+#[tauri::command]
+#[cfg(not(target_os = "macos"))]
 fn activer_biometrie(
     app: AppHandle,
     state: State<AppState>,
@@ -103,6 +122,14 @@ fn activer_biometrie(
 }
 
 #[tauri::command]
+#[cfg(target_os = "macos")]
+fn activer_biometrie(password: String) -> Result<BiometryUiStatus, String> {
+    let _ = password;
+    Err("Biometrie desactivee sur macOS.".to_string())
+}
+
+#[tauri::command]
+#[cfg(not(target_os = "macos"))]
 fn desactiver_biometrie(app: AppHandle) -> Result<BiometryUiStatus, String> {
     app.biometry()
         .remove_data(biometry_data_options())
@@ -111,6 +138,13 @@ fn desactiver_biometrie(app: AppHandle) -> Result<BiometryUiStatus, String> {
 }
 
 #[tauri::command]
+#[cfg(target_os = "macos")]
+fn desactiver_biometrie() -> Result<BiometryUiStatus, String> {
+    biometrie_status()
+}
+
+#[tauri::command]
+#[cfg(not(target_os = "macos"))]
 fn deverrouiller_biometrie(app: AppHandle, state: State<AppState>) -> Result<AuthStatus, String> {
     let data = app
         .biometry()
@@ -128,6 +162,12 @@ fn deverrouiller_biometrie(app: AppHandle, state: State<AppState>) -> Result<Aut
         .map_err(|_| "Le coffre est indisponible.".to_string())?;
     store.unlock(data.data).map_err(|error| error.to_string())?;
     Ok(store.auth_status())
+}
+
+#[tauri::command]
+#[cfg(target_os = "macos")]
+fn deverrouiller_biometrie() -> Result<AuthStatus, String> {
+    Err("Biometrie desactivee sur macOS.".to_string())
 }
 
 #[tauri::command]
@@ -324,8 +364,11 @@ fn importer(
 }
 
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_biometry::init())
+    let builder = tauri::Builder::default();
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.plugin(tauri_plugin_biometry::init());
+
+    builder
         .setup(|app| {
             let app_dir = app
                 .path()

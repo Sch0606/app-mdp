@@ -85,7 +85,6 @@ class TauriStaticAppTest(unittest.TestCase):
         style = Path("src/style.css").read_text(encoding="utf-8")
         lib = Path("src-tauri/src/lib.rs").read_text(encoding="utf-8")
         config = Path("src-tauri/tauri.conf.json").read_text(encoding="utf-8")
-        entitlements = Path("src-tauri/entitlements.plist").read_text(encoding="utf-8")
         package = Path("package.json").read_text(encoding="utf-8")
 
         for marker in [
@@ -95,6 +94,7 @@ class TauriStaticAppTest(unittest.TestCase):
             'id="lock-hotkey-display"',
             'id="record-lock-hotkey"',
             'id="clear-lock-hotkey"',
+            'id="biometry-settings"',
             'id="biometry-status"',
             'id="enable-biometry"',
             'id="disable-biometry"',
@@ -128,10 +128,7 @@ class TauriStaticAppTest(unittest.TestCase):
         self.assertIn("fn changer_mot_de_passe_maitre", lib)
         self.assertIn("fn biometrie_status", lib)
         self.assertIn("tauri_plugin_biometry::init()", lib)
-        self.assertIn('"entitlements": "entitlements.plist"', config)
-        self.assertIn('"signingIdentity": "-"', config)
-        self.assertIn("keychain-access-groups", entitlements)
-        self.assertIn("<array/>", entitlements)
+        self.assertNotIn('"entitlements": "entitlements.plist"', config)
         self.assertIn('"build:mac-local"', package)
         self.assertIn(".generator-collapsed .tool-panel:first-child", style)
         self.assertIn(".settings-page", style)
@@ -151,31 +148,13 @@ class TauriStaticAppTest(unittest.TestCase):
         self.assertIn("actions/upload-artifact@v6", workflow)
         self.assertIn("softprops/action-gh-release@v3", workflow)
 
-    def test_macos_biometry_test_workflow_builds_signed_app_artifact(self):
-        workflow = Path(".github/workflows/macos-biometry-test.yml").read_text(encoding="utf-8")
-        docs = Path("MACOS_BIOMETRY.md").read_text(encoding="utf-8")
+    def test_macos_biometry_is_disabled_without_keychain_workflow(self):
+        lib = Path("src-tauri/src/lib.rs").read_text(encoding="utf-8")
 
-        self.assertIn("workflow_dispatch", workflow)
-        self.assertIn("runs-on: macos-latest", workflow)
-        self.assertIn("npm run build:mac-local", workflow)
-        self.assertIn("npm run build:mac-dmg", workflow)
-        self.assertIn("codesign --verify", workflow)
-        self.assertIn("codesign -d --entitlements", workflow)
-        self.assertIn("Clave-macOS-biometry-test.zip", workflow)
-        self.assertIn("bundle/dmg/*.dmg", workflow)
-        self.assertIn("macos-repair-clave.sh", workflow)
-        self.assertIn("entitlements.plist dist/", workflow)
-        self.assertIn("path: dist/*", workflow)
-        self.assertIn("actions/upload-artifact@v6", workflow)
-        self.assertIn("Build macOS biometry test", docs)
-        self.assertIn("Utilisez le fichier `.dmg`", docs)
-        self.assertIn("./macos-repair-clave.sh /Applications/Clave.app", docs)
-        self.assertLess(
-            workflow.index("Verify app signature and entitlements"),
-            workflow.index("Build ad-hoc signed macOS DMG"),
-        )
-
-        repair_script = Path("scripts/macos-repair-clave.sh").read_text(encoding="utf-8")
-        self.assertIn("xattr -dr com.apple.quarantine", repair_script)
-        self.assertIn("chmod 755", repair_script)
-        self.assertIn("codesign --force --deep --sign -", repair_script)
+        self.assertFalse(Path(".github/workflows/macos-biometry-test.yml").exists())
+        self.assertFalse(Path("MACOS_BIOMETRY.md").exists())
+        self.assertFalse(Path("scripts/macos-repair-clave.sh").exists())
+        self.assertFalse(Path("src-tauri/entitlements.plist").exists())
+        self.assertIn('#[cfg(target_os = "macos")]', lib)
+        self.assertIn("Biometrie desactivee sur macOS.", lib)
+        self.assertIn('#[cfg(not(target_os = "macos"))]', lib)
