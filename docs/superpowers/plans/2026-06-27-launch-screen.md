@@ -223,4 +223,3 @@ Expected: JavaScript exits with code 0, 13 Python tests pass, 10 Rust tests pass
 git add src/index.html src/style.css src/script.js
 git commit -m "feat: add Clave launch screen"
 ```
-
