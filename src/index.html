@@ -9,7 +9,31 @@
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./style.css">
 </head>
-<body>
+<body class="locked">
+<section class="lock-screen" id="lock-screen" aria-labelledby="lock-title">
+    <div class="lock-card">
+        <span class="brand-mark lock-mark">C</span>
+        <p class="eyebrow" id="lock-eyebrow">Securite locale</p>
+        <h2 id="lock-title">Creer le mot de passe maitre</h2>
+        <p class="lock-copy" id="lock-copy">Il protegera l'ouverture de Clave sur cet appareil.</p>
+
+        <form id="lock-form" class="lock-form">
+            <label>
+                <span>Mot de passe maitre</span>
+                <span class="secret-field">
+                    <input type="password" id="master-password" autocomplete="current-password" minlength="8">
+                    <button class="toggle-secret" type="button" aria-label="Afficher le secret" title="Afficher le secret">
+                        <span class="eye-open">●</span>
+                    </button>
+                </span>
+            </label>
+            <p class="lock-error" id="lock-error" role="alert"></p>
+            <button class="btn-ajouter lock-submit" id="lock-submit" type="submit">Continuer</button>
+            <button class="btn-secondary lock-submit" id="biometry-unlock" type="button" hidden>Utiliser la biometrie</button>
+        </form>
+    </div>
+</section>
+
 <aside class="sidebar">
     <div class="brand">
         <span class="brand-mark">C</span>
@@ -44,6 +68,16 @@
         </div>
     </header>
 
+    <section class="toolbar" aria-label="Actions du coffre">
+        <label class="search-box">
+            <span>Recherche</span>
+            <input type="search" id="search-input" placeholder="Service, identifiant, espace">
+        </label>
+        <div class="toolbar-actions">
+            <button class="btn-secondary" id="lock-now" type="button">Verrouiller</button>
+        </div>
+    </section>
+
     <section class="entry-panel" aria-label="Ajouter un accès">
         <div class="ligne form-row">
             <label>
@@ -66,9 +100,37 @@
             <button id="generer" type="button">Générer</button>
         </div>
         <div class="panel-actions">
-            <p>Stockage chiffré dans le dossier local de l'application.</p>
+            <div class="strength">
+                <span id="strength-label">Force non mesuree</span>
+                <span class="strength-track"><span id="strength-bar"></span></span>
+            </div>
             <button class="btn-ajouter" type="button">Enregistrer</button>
         </div>
+    </section>
+
+    <section class="tools-grid generator-collapsed" aria-label="Outils de securite">
+        <article class="tool-panel">
+            <div class="tool-heading">
+                <p class="section-label">Generateur</p>
+                <output id="generator-output">Pret</output>
+            </div>
+            <label class="range-field">
+                <span>Longueur <strong id="generator-length-value">20</strong></span>
+                <input type="range" id="generator-length" min="12" max="40" value="20">
+            </label>
+            <div class="option-row">
+                <label><input type="checkbox" id="generator-symbols" checked> Symboles</label>
+                <label><input type="checkbox" id="generator-numbers" checked> Chiffres</label>
+                <label><input type="checkbox" id="generator-readable"> Lisible</label>
+            </div>
+        </article>
+        <article class="tool-panel" id="audit-panel">
+            <div class="tool-heading">
+                <p class="section-label">Audit</p>
+                <span id="audit-score">0 alerte</span>
+            </div>
+            <ul id="audit-list"></ul>
+        </article>
     </section>
 
     <section class="vault-list" aria-label="Accès enregistrés">
@@ -80,6 +142,101 @@
 </main>
 
 <div id="toast" role="status" aria-live="polite"></div>
+<input type="file" id="import-file" accept="application/json,.json" hidden>
+
+<button class="settings-button" id="settings-button" type="button" aria-expanded="false" aria-controls="settings-page" title="Parametres">
+    ⚙
+</button>
+
+<main class="settings-page" id="settings-page" hidden aria-label="Parametres">
+    <header class="settings-page-header">
+        <button class="btn-secondary" id="close-settings" type="button">Retour au coffre</button>
+        <div>
+            <p class="eyebrow">Clave</p>
+            <h3>Parametres</h3>
+            <p>Controle la securite, l'interface et les sauvegardes du coffre.</p>
+        </div>
+    </header>
+
+    <section class="settings-layout">
+        <article class="settings-card">
+            <div>
+                <p class="section-label">Securite</p>
+                <h4>Verrouillage</h4>
+            </div>
+            <button class="btn-ajouter" id="settings-lock-now" type="button">Verrouiller maintenant</button>
+            <label class="settings-field">
+                <span>Verrouillage automatique</span>
+                <select id="auto-lock-delay">
+                    <option value="120000">2 minutes</option>
+                    <option value="300000">5 minutes</option>
+                    <option value="600000">10 minutes</option>
+                    <option value="0">Desactive</option>
+                </select>
+            </label>
+            <div class="settings-field">
+                <span>Touche de verrouillage</span>
+                <div class="hotkey-row">
+                    <output id="lock-hotkey-display">Aucune</output>
+                    <button class="btn-secondary" id="record-lock-hotkey" type="button">Definir</button>
+                    <button class="mini-action" id="clear-lock-hotkey" type="button">Retirer</button>
+                </div>
+            </div>
+            <div class="settings-field">
+                <span>Biometrie</span>
+                <p class="settings-feedback" id="biometry-status">Verification...</p>
+                <input type="password" id="biometry-master-password" placeholder="Mot de passe maitre" autocomplete="current-password">
+                <div class="settings-actions">
+                    <button class="btn-secondary" id="enable-biometry" type="button">Activer</button>
+                    <button class="mini-action" id="disable-biometry" type="button">Desactiver</button>
+                </div>
+            </div>
+        </article>
+
+        <form class="settings-card" id="change-master-form">
+            <div>
+                <p class="section-label">Mot de passe maitre</p>
+                <h4>Changer l'acces au coffre</h4>
+            </div>
+            <label class="settings-field">
+                <span>Ancien mot de passe</span>
+                <input type="password" id="old-master-password" autocomplete="current-password">
+            </label>
+            <label class="settings-field">
+                <span>Nouveau mot de passe</span>
+                <input type="password" id="new-master-password" autocomplete="new-password" minlength="8">
+            </label>
+            <label class="settings-field">
+                <span>Confirmer</span>
+                <input type="password" id="confirm-new-master-password" autocomplete="new-password" minlength="8">
+            </label>
+            <p class="settings-feedback" id="settings-feedback" role="status"></p>
+            <button class="btn-secondary" type="submit">Changer le mot de passe</button>
+        </form>
+
+        <article class="settings-card">
+            <div>
+                <p class="section-label">Interface</p>
+                <h4>Barre d'actions</h4>
+            </div>
+            <label class="settings-toggle">
+                <input type="checkbox" id="toggle-toolbar-lock" checked>
+                <span>Afficher le bouton Verrouiller dans la barre du haut</span>
+            </label>
+        </article>
+
+        <article class="settings-card">
+            <div>
+                <p class="section-label">Sauvegarde</p>
+                <h4>Import et export</h4>
+            </div>
+            <div class="settings-actions">
+                <button class="btn-secondary" id="settings-export-vault" type="button">Exporter</button>
+                <button class="btn-secondary" id="settings-import-vault" type="button">Importer</button>
+            </div>
+        </article>
+    </section>
+</main>
 
 <div class="context-menu" id="category-menu" role="menu" aria-hidden="true">
     <button type="button" id="menu-rename" role="menuitem">
@@ -115,6 +272,25 @@
         <div class="modal-actions">
             <button class="btn-secondary" id="cancel-delete" type="button">Annuler</button>
             <button class="btn-danger" id="confirm-delete" type="button">Supprimer</button>
+        </div>
+    </section>
+</div>
+
+<div class="modal-backdrop" id="backup-modal" aria-hidden="true">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="backup-title">
+        <p class="eyebrow" id="backup-eyebrow">Sauvegarde</p>
+        <h3 id="backup-title">Exporter le coffre</h3>
+        <p class="modal-copy" id="backup-copy">Choisissez un mot de passe pour chiffrer le fichier de sauvegarde.</p>
+        <label class="modal-field">
+            <span>Mot de passe de sauvegarde</span>
+            <span class="secret-field">
+                <input type="password" id="backup-password" autocomplete="new-password">
+                <button class="toggle-secret" type="button" aria-label="Afficher le secret" title="Afficher le secret">●</button>
+            </span>
+        </label>
+        <div class="modal-actions">
+            <button class="btn-secondary" id="cancel-backup" type="button">Annuler</button>
+            <button class="btn-ajouter" id="confirm-backup" type="button">Valider</button>
         </div>
     </section>
 </div>
