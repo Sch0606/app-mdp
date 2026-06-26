@@ -42,6 +42,9 @@ jobs:
       - name: Build ad-hoc signed macOS app
         run: npm run build:mac-local
 
+      - name: Build ad-hoc signed macOS DMG
+        run: npm run build:mac-dmg
+
       - name: Verify app signature and entitlements
         run: |
           APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/Clave.app"
@@ -50,12 +53,14 @@ jobs:
 
       - name: Zip app
         run: |
+          mkdir -p dist
           APP_DIR="src-tauri/target/universal-apple-darwin/release/bundle/macos"
-          ditto -c -k --keepParent "$APP_DIR/Clave.app" "Clave-macOS-biometry-test.zip"
+          ditto -c -k --keepParent "$APP_DIR/Clave.app" "dist/Clave-macOS-biometry-test.zip"
+          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg dist/
 
       - name: Upload macOS app
         uses: actions/upload-artifact@v6
         with:
           name: Clave-macOS-biometry-test
-          path: Clave-macOS-biometry-test.zip
+          path: dist/*
           if-no-files-found: error
