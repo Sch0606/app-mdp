@@ -42,9 +42,6 @@ jobs:
       - name: Build ad-hoc signed macOS app
         run: npm run build:mac-local
 
-      - name: Build ad-hoc signed macOS DMG
-        run: npm run build:mac-dmg
-
       - name: Verify app signature and entitlements
         run: |
           APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/Clave.app"
@@ -56,6 +53,12 @@ jobs:
           mkdir -p dist
           APP_DIR="src-tauri/target/universal-apple-darwin/release/bundle/macos"
           ditto -c -k --keepParent "$APP_DIR/Clave.app" "dist/Clave-macOS-biometry-test.zip"
+
+      - name: Build ad-hoc signed macOS DMG
+        run: npm run build:mac-dmg
+
+      - name: Collect macOS files
+        run: |
           cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg dist/
           cp src-tauri/entitlements.plist dist/
           cp scripts/macos-repair-clave.sh dist/

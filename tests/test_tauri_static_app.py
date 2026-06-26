@@ -170,6 +170,10 @@ class TauriStaticAppTest(unittest.TestCase):
         self.assertIn("Build macOS biometry test", docs)
         self.assertIn("Utilisez le fichier `.dmg`", docs)
         self.assertIn("./macos-repair-clave.sh /Applications/Clave.app", docs)
+        self.assertLess(
+            workflow.index("Verify app signature and entitlements"),
+            workflow.index("Build ad-hoc signed macOS DMG"),
+        )
 
         repair_script = Path("scripts/macos-repair-clave.sh").read_text(encoding="utf-8")
         self.assertIn("xattr -dr com.apple.quarantine", repair_script)
