@@ -27,6 +27,106 @@ class TauriStaticAppTest(unittest.TestCase):
         self.assertIn("supprimer_categorie", script)
         self.assertIn("fn supprimer_categorie", lib)
 
+    def test_master_password_lock_screen_is_wired(self):
+        html = Path("src/index.html").read_text(encoding="utf-8")
+        script = Path("src/script.js").read_text(encoding="utf-8")
+        lib = Path("src-tauri/src/lib.rs").read_text(encoding="utf-8")
+        store = Path("src-tauri/src/store.rs").read_text(encoding="utf-8")
+
+        self.assertIn('id="lock-screen"', html)
+        self.assertIn('id="master-password"', html)
+        self.assertNotIn('id="master-confirm"', html)
+        self.assertIn("auth_status", script)
+        self.assertIn("setup_master_password", script)
+        self.assertIn("unlock", script)
+        self.assertIn("fn auth_status", lib)
+        self.assertIn("fn setup_master_password", lib)
+        self.assertIn("fn unlock", lib)
+        self.assertIn("PBKDF2-HMAC-SHA256", store)
+        self.assertIn("wrapped_key", store)
+
+    def test_productivity_security_options_are_wired(self):
+        html = Path("src/index.html").read_text(encoding="utf-8")
+        script = Path("src/script.js").read_text(encoding="utf-8")
+        lib = Path("src-tauri/src/lib.rs").read_text(encoding="utf-8")
+
+        for marker in [
+            'id="search-input"',
+            'id="lock-now"',
+            'id="audit-panel"',
+            'id="generator-length"',
+            'id="backup-modal"',
+        ]:
+            self.assertIn(marker, html)
+
+        self.assertNotIn('id="export-vault"', html)
+        self.assertNotIn('id="import-vault"', html)
+
+        for marker in [
+            "filtrerAcces",
+            "copierTexte",
+            "modifierAcces",
+            "supprimerAcces",
+            "verrouillerApplication",
+            "evaluerForceMotDePasse",
+            "mettreAJourAudit",
+            "exporterCoffre",
+            "importerCoffre",
+        ]:
+            self.assertIn(marker, script)
+
+        for command in ["modifier", "supprimer_acces", "exporter", "importer"]:
+            self.assertIn(f"fn {command}", lib)
+            self.assertIn(command, script)
+
+    def test_settings_page_and_collapsed_generator_are_wired(self):
+        html = Path("src/index.html").read_text(encoding="utf-8")
+        script = Path("src/script.js").read_text(encoding="utf-8")
+        style = Path("src/style.css").read_text(encoding="utf-8")
+        lib = Path("src-tauri/src/lib.rs").read_text(encoding="utf-8")
+
+        for marker in [
+            'id="settings-button"',
+            'id="settings-page"',
+            'id="settings-lock-now"',
+            'id="lock-hotkey-display"',
+            'id="record-lock-hotkey"',
+            'id="clear-lock-hotkey"',
+            'id="biometry-status"',
+            'id="enable-biometry"',
+            'id="disable-biometry"',
+            'id="toggle-toolbar-lock"',
+            'id="auto-lock-delay"',
+            'id="change-master-form"',
+            'id="settings-export-vault"',
+            'id="settings-import-vault"',
+            'class="tools-grid generator-collapsed"',
+        ]:
+            self.assertIn(marker, html)
+
+        for marker in [
+            "ouvrirParametres",
+            "fermerParametres",
+            "changerMotDePasseMaitre",
+            "appliquerPreferenceVerrouillage",
+            "appliquerDelaiVerrouillage",
+            "capturerRaccourciVerrouillage",
+            "gererRaccourciVerrouillage",
+            "mettreAJourBiometrie",
+            "activerBiometrie",
+            "deverrouillerAvecBiometrie",
+            "afficherGenerateur",
+            "changer_mot_de_passe_maitre",
+            "biometrie_status",
+        ]:
+            self.assertIn(marker, script)
+
+        self.assertIn("fn changer_mot_de_passe_maitre", lib)
+        self.assertIn("fn biometrie_status", lib)
+        self.assertIn("tauri_plugin_biometry::init()", lib)
+        self.assertIn(".generator-collapsed .tool-panel:first-child", style)
+        self.assertIn(".settings-page", style)
+
     def test_release_workflow_uses_universal_macos_bundle_path(self):
         workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
 
