@@ -33,6 +33,15 @@ function afficherErreurVerrou(message) {
     document.getElementById('lock-error').textContent = message
 }
 
+function expliquerErreurBiometrie(error) {
+    const message = String(error)
+    if (message.includes('-34018')) {
+        return 'macOS refuse l acces au Trousseau. Lance une build signee localement avec npm run build:mac-local, puis reactive la biometrie.'
+    }
+
+    return message
+}
+
 function reglerModeVerrou(configured) {
     authMode = configured ? 'unlock' : 'setup'
 
@@ -224,7 +233,7 @@ async function activerBiometrie() {
         await mettreAJourBiometrie()
         afficherToast('Biometrie activee.')
     } catch (error) {
-        afficherToast(String(error))
+        afficherToast(expliquerErreurBiometrie(error))
     }
 }
 
@@ -234,7 +243,7 @@ async function desactiverBiometrie() {
         await mettreAJourBiometrie()
         afficherToast('Biometrie desactivee.')
     } catch (error) {
-        afficherToast(String(error))
+        afficherToast(expliquerErreurBiometrie(error))
     }
 }
 
@@ -245,7 +254,7 @@ async function deverrouillerAvecBiometrie() {
         await invoke('deverrouiller_biometrie')
         await ouvrirApplication()
     } catch (error) {
-        afficherErreurVerrou(String(error))
+        afficherErreurVerrou(expliquerErreurBiometrie(error))
     }
 }
 

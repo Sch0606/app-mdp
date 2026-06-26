@@ -84,6 +84,9 @@ class TauriStaticAppTest(unittest.TestCase):
         script = Path("src/script.js").read_text(encoding="utf-8")
         style = Path("src/style.css").read_text(encoding="utf-8")
         lib = Path("src-tauri/src/lib.rs").read_text(encoding="utf-8")
+        config = Path("src-tauri/tauri.conf.json").read_text(encoding="utf-8")
+        entitlements = Path("src-tauri/entitlements.plist").read_text(encoding="utf-8")
+        package = Path("package.json").read_text(encoding="utf-8")
 
         for marker in [
             'id="settings-button"',
@@ -115,6 +118,7 @@ class TauriStaticAppTest(unittest.TestCase):
             "mettreAJourBiometrie",
             "activerBiometrie",
             "deverrouillerAvecBiometrie",
+            "expliquerErreurBiometrie",
             "afficherGenerateur",
             "changer_mot_de_passe_maitre",
             "biometrie_status",
@@ -124,6 +128,11 @@ class TauriStaticAppTest(unittest.TestCase):
         self.assertIn("fn changer_mot_de_passe_maitre", lib)
         self.assertIn("fn biometrie_status", lib)
         self.assertIn("tauri_plugin_biometry::init()", lib)
+        self.assertIn('"entitlements": "entitlements.plist"', config)
+        self.assertIn('"signingIdentity": "-"', config)
+        self.assertIn("keychain-access-groups", entitlements)
+        self.assertIn("<array/>", entitlements)
+        self.assertIn('"build:mac-local"', package)
         self.assertIn(".generator-collapsed .tool-panel:first-child", style)
         self.assertIn(".settings-page", style)
 
@@ -141,3 +150,16 @@ class TauriStaticAppTest(unittest.TestCase):
         self.assertIn("actions/setup-node@v5", workflow)
         self.assertIn("actions/upload-artifact@v6", workflow)
         self.assertIn("softprops/action-gh-release@v3", workflow)
+
+    def test_macos_biometry_test_workflow_builds_signed_app_artifact(self):
+        workflow = Path(".github/workflows/macos-biometry-test.yml").read_text(encoding="utf-8")
+        docs = Path("MACOS_BIOMETRY.md").read_text(encoding="utf-8")
+
+        self.assertIn("workflow_dispatch", workflow)
+        self.assertIn("runs-on: macos-latest", workflow)
+        self.assertIn("npm run build:mac-local", workflow)
+        self.assertIn("codesign --verify", workflow)
+        self.assertIn("codesign -d --entitlements", workflow)
+        self.assertIn("Clave-macOS-biometry-test.zip", workflow)
+        self.assertIn("actions/upload-artifact@v6", workflow)
+        self.assertIn("Build macOS biometry test", docs)
