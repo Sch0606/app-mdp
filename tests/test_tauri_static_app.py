@@ -45,6 +45,21 @@ class TauriStaticAppTest(unittest.TestCase):
         self.assertIn("PBKDF2-HMAC-SHA256", store)
         self.assertIn("wrapped_key", store)
 
+    def test_launch_screen_waits_for_auth_and_exits_cleanly(self):
+        html = Path("src/index.html").read_text(encoding="utf-8")
+        script = Path("src/script.js").read_text(encoding="utf-8")
+        style = Path("src/style.css").read_text(encoding="utf-8")
+
+        self.assertIn('class="locked launching"', html)
+        self.assertIn('id="launch-screen"', html)
+        self.assertIn('role="status"', html)
+        self.assertIn("LAUNCH_MINIMUM_MS = 500", script)
+        self.assertIn("terminerEcranLancement", script)
+        self.assertIn("demarrerApplication", script)
+        self.assertIn("finally", script)
+        self.assertIn(".launch-screen.is-leaving", style)
+        self.assertIn("prefers-reduced-motion", style)
+
     def test_productivity_security_options_are_wired(self):
         html = Path("src/index.html").read_text(encoding="utf-8")
         script = Path("src/script.js").read_text(encoding="utf-8")
