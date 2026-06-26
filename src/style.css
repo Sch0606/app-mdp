@@ -329,6 +329,10 @@ input:focus {
     box-shadow: 0 0 0 4px rgba(159, 230, 206, 0.26);
 }
 
+.app-root {
+    display: contents;
+}
+
 .launch-screen {
     position: fixed;
     inset: 0;

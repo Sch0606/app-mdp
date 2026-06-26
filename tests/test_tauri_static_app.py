@@ -53,12 +53,25 @@ class TauriStaticAppTest(unittest.TestCase):
         self.assertIn('class="locked launching"', html)
         self.assertIn('id="launch-screen"', html)
         self.assertIn('role="status"', html)
+        self.assertIn('id="app-root" inert aria-hidden="true"', html)
         self.assertIn("LAUNCH_MINIMUM_MS = 500", script)
         self.assertIn("terminerEcranLancement", script)
         self.assertIn("demarrerApplication", script)
         self.assertIn("finally", script)
+        self.assertIn("appRoot.inert = false", script)
+        self.assertIn("appRoot.removeAttribute('aria-hidden')", script)
+        self.assertIn("document.body.classList.remove('launching')", script)
+        self.assertIn("afficherErreurDemarrage", script)
         self.assertIn(".launch-screen.is-leaving", style)
+        self.assertIn(".app-root", style)
         self.assertIn("prefers-reduced-motion", style)
+
+        startup = script[script.index("async function demarrerApplication()") :]
+        self.assertIn("let startupError = null", startup)
+        self.assertLess(
+            startup.index("await terminerEcranLancement()"),
+            startup.index("afficherErreurDemarrage(startupError)"),
+        )
 
     def test_productivity_security_options_are_wired(self):
         html = Path("src/index.html").read_text(encoding="utf-8")
