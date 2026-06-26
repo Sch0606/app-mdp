@@ -9,7 +9,16 @@
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./style.css">
 </head>
-<body class="locked">
+<body class="locked launching">
+<section class="launch-screen" id="launch-screen" role="status" aria-live="polite" aria-label="Ouverture de Clave">
+    <div class="launch-content">
+        <span class="launch-mark" aria-hidden="true">C</span>
+        <p class="launch-brand">Clave</p>
+        <p class="launch-message">Ouverture du coffre</p>
+        <span class="launch-progress" aria-hidden="true"><span></span></span>
+    </div>
+</section>
+
 <section class="lock-screen" id="lock-screen" aria-labelledby="lock-title">
     <div class="lock-card">
         <span class="brand-mark lock-mark">C</span>

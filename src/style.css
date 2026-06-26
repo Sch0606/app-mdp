@@ -329,6 +329,81 @@ input:focus {
     box-shadow: 0 0 0 4px rgba(159, 230, 206, 0.26);
 }
 
+.launch-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: grid;
+    place-items: center;
+    color: #f8fffc;
+    background: var(--clave-forest);
+    opacity: 1;
+    transition: opacity 220ms var(--ease);
+}
+
+.launch-screen.is-leaving {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.launch-content {
+    display: grid;
+    justify-items: center;
+    gap: 10px;
+    animation: launchContentIn 500ms var(--ease) both;
+}
+
+.launch-mark {
+    width: 58px;
+    height: 58px;
+    display: grid;
+    place-items: center;
+    border-radius: 10px;
+    color: var(--clave-forest);
+    background: var(--clave-mint);
+    font-family: "Space Grotesk", Manrope, sans-serif;
+    font-size: 30px;
+    font-weight: 700;
+}
+
+.launch-brand {
+    font-family: "Space Grotesk", Manrope, sans-serif;
+    font-size: 24px;
+    font-weight: 700;
+}
+
+.launch-message {
+    color: rgba(248, 255, 252, 0.68);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.launch-progress {
+    width: 104px;
+    height: 2px;
+    margin-top: 12px;
+    overflow: hidden;
+    background: rgba(248, 255, 252, 0.16);
+}
+
+.launch-progress span {
+    width: 42%;
+    height: 100%;
+    display: block;
+    background: var(--clave-mint);
+    animation: launchProgress 900ms ease-in-out infinite;
+}
+
+@keyframes launchContentIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes launchProgress {
+    from { transform: translateX(-120%); }
+    to { transform: translateX(340%); }
+}
+
 .lock-screen {
     position: fixed;
     inset: 0;
