@@ -1026,25 +1026,67 @@ function attendre(ms) {
 }
 
 async function terminerEcranLancement() {
-    const elapsed = performance.now() - launchStartedAt
-    await attendre(LAUNCH_MINIMUM_MS - elapsed)
+    try {
+        const elapsed = performance.now() - launchStartedAt
+        await attendre(LAUNCH_MINIMUM_MS - elapsed)
 
-    const launchScreen = document.getElementById('launch-screen')
-    if (!launchScreen) return
+        const launchScreen = document.getElementById('launch-screen')
+        if (launchScreen) {
+            let reducedMotion = false
 
-    launchScreen.classList.add('is-leaving')
-    await attendre(window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 220)
-    launchScreen.remove()
-    document.body.classList.remove('launching')
+            try {
+                reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+            } catch (_) {}
+
+            launchScreen.classList.add('is-leaving')
+            await attendre(reducedMotion ? 0 : 220)
+            launchScreen.remove()
+        }
+    } finally {
+        const appRoot = document.getElementById('app-root')
+        if (appRoot) {
+            appRoot.inert = false
+            appRoot.removeAttribute('aria-hidden')
+        }
+
+        document.body.classList.remove('launching')
+
+        const masterPassword = document.getElementById('master-password')
+        window.setTimeout(function() {
+            if (document.body.classList.contains('locked') && !masterPassword.disabled) {
+                masterPassword.focus()
+            }
+        }, 0)
+    }
+}
+
+function afficherErreurDemarrage(error) {
+    document.body.classList.add('locked')
+    document.getElementById('lock-screen').setAttribute('aria-hidden', 'false')
+    document.getElementById('lock-eyebrow').textContent = 'Erreur de demarrage'
+    document.getElementById('lock-title').textContent = "Clave n'a pas pu s'ouvrir"
+    document.getElementById('lock-copy').textContent = "Fermez puis relancez l'application."
+
+    document.querySelectorAll('#lock-form input, #lock-form button').forEach(function(control) {
+        control.disabled = true
+    })
+
+    afficherErreurVerrou(String(error))
 }
 
 async function demarrerApplication() {
+    let startupError = null
+
     try {
         await initialiserAuth()
     } catch (error) {
-        afficherToast(String(error))
+        startupError = error
     } finally {
         await terminerEcranLancement()
+    }
+
+    if (startupError) {
+        afficherErreurDemarrage(startupError)
     }
 }
 
