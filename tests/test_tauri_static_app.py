@@ -26,3 +26,18 @@ class TauriStaticAppTest(unittest.TestCase):
         self.assertIn("contextmenu", script)
         self.assertIn("supprimer_categorie", script)
         self.assertIn("fn supprimer_categorie", lib)
+
+    def test_release_workflow_uses_universal_macos_bundle_path(self):
+        workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("--target universal-apple-darwin", workflow)
+        self.assertIn(
+            "asset-source: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg",
+            workflow,
+        )
+        self.assertIn("path: dist/*", workflow)
+        self.assertIn("files: dist/*", workflow)
+        self.assertIn("actions/checkout@v5", workflow)
+        self.assertIn("actions/setup-node@v5", workflow)
+        self.assertIn("actions/upload-artifact@v6", workflow)
+        self.assertIn("softprops/action-gh-release@v3", workflow)
