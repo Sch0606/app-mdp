@@ -35,8 +35,8 @@ function afficherErreurVerrou(message) {
 
 function expliquerErreurBiometrie(error) {
     const message = String(error)
-    if (message.includes('-34018')) {
-        return 'macOS refuse l acces au Trousseau. Lance une build signee localement avec npm run build:mac-local, puis reactive la biometrie.'
+    if (message.includes('desactivee sur macOS')) {
+        return 'Biometrie desactivee sur macOS.'
     }
 
     return message

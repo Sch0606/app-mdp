@@ -27,10 +27,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.ico", "icons/icon.icns", "icons/icon.png"],
-    "macOS": {
-      "entitlements": "entitlements.plist",
-      "signingIdentity": "-"
-    }
+    "icon": ["icons/icon.ico", "icons/icon.icns", "icons/icon.png"]
   }
 }
