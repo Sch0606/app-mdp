@@ -1,3 +1,5 @@
+const LAUNCH_MINIMUM_MS = 500
+const launchStartedAt = performance.now()
 const invoke = window.__TAURI__.core.invoke
 
 const categories = { Perso: [] }
@@ -1017,9 +1019,36 @@ document.addEventListener('keydown', function(e) {
     document.addEventListener(eventName, reprogrammerVerrouillageAuto, { passive: true })
 })
 
-initialiserAuth().catch(function(error) {
-    afficherToast(String(error))
-})
+function attendre(ms) {
+    return new Promise(function(resolve) {
+        window.setTimeout(resolve, Math.max(0, ms))
+    })
+}
+
+async function terminerEcranLancement() {
+    const elapsed = performance.now() - launchStartedAt
+    await attendre(LAUNCH_MINIMUM_MS - elapsed)
+
+    const launchScreen = document.getElementById('launch-screen')
+    if (!launchScreen) return
+
+    launchScreen.classList.add('is-leaving')
+    await attendre(window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 220)
+    launchScreen.remove()
+    document.body.classList.remove('launching')
+}
+
+async function demarrerApplication() {
+    try {
+        await initialiserAuth()
+    } catch (error) {
+        afficherToast(String(error))
+    } finally {
+        await terminerEcranLancement()
+    }
+}
+
+demarrerApplication()
 appliquerPreferenceVerrouillage()
 mettreAJourAffichageRaccourci()
 mettreAJourBiometrie().catch(function() {})
