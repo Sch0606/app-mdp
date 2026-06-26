@@ -16,8 +16,20 @@ Si le projet est sur un PC Windows, utilisez GitHub Actions :
 2. Ouvrez l'onglet `Actions`.
 3. Lancez le workflow `Build macOS biometry test`.
 4. Telechargez l'artifact `Clave-macOS-biometry-test`.
-5. Dezippez le fichier sur le Mac.
-6. Lancez `Clave.app`, puis activez la biometrie depuis les parametres.
+5. Utilisez le fichier `.dmg` si disponible.
+6. Ouvrez le `.dmg`, copiez `Clave.app` dans `Applications`, puis lancez `Clave.app`.
+7. Activez la biometrie depuis les parametres.
+
+Si macOS affiche `Impossible d'ouvrir l'application Clave`, essayez dans cet ordre :
+
+1. Clic droit sur `Clave.app`, puis `Ouvrir`.
+2. Si macOS bloque encore, ouvrez `Reglages Systeme > Confidentialite et securite`, puis cliquez sur `Ouvrir quand meme`.
+3. Si l'app vient d'un zip GitHub, retirez l'attribut de quarantaine :
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Clave.app
+chmod +x /Applications/Clave.app/Contents/MacOS/*
+```
 
 `npm run tauri dev` peut encore afficher `-34018` parce que macOS refuse parfois l'ecriture dans le Trousseau aux binaires de developpement non signes avec les bons entitlements.
 
