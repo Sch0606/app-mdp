@@ -24,11 +24,23 @@ Si macOS affiche `Impossible d'ouvrir l'application Clave`, essayez dans cet ord
 
 1. Clic droit sur `Clave.app`, puis `Ouvrir`.
 2. Si macOS bloque encore, ouvrez `Reglages Systeme > Confidentialite et securite`, puis cliquez sur `Ouvrir quand meme`.
-3. Si l'app vient d'un zip GitHub, retirez l'attribut de quarantaine :
+3. Si l'app bloque encore, lancez le script fourni dans l'artifact GitHub :
+
+```bash
+cd ~/Downloads/Clave-macOS-biometry-test
+chmod +x macos-repair-clave.sh
+./macos-repair-clave.sh /Applications/Clave.app
+```
+
+Le script retire l'attribut de quarantaine, remet les droits d'execution du binaire et re-signe `Clave.app` en ad hoc sur le Mac avec les entitlements Keychain.
+
+Si vous n'avez pas le script, faites la reparation minimale manuellement :
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Clave.app
 chmod +x /Applications/Clave.app/Contents/MacOS/*
+codesign --force --deep --sign - /Applications/Clave.app
+open /Applications/Clave.app
 ```
 
 `npm run tauri dev` peut encore afficher `-34018` parce que macOS refuse parfois l'ecriture dans le Trousseau aux binaires de developpement non signes avec les bons entitlements.

@@ -57,6 +57,9 @@ jobs:
           APP_DIR="src-tauri/target/universal-apple-darwin/release/bundle/macos"
           ditto -c -k --keepParent "$APP_DIR/Clave.app" "dist/Clave-macOS-biometry-test.zip"
           cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg dist/
+          cp src-tauri/entitlements.plist dist/
+          cp scripts/macos-repair-clave.sh dist/
+          chmod +x dist/macos-repair-clave.sh
 
       - name: Upload macOS app
         uses: actions/upload-artifact@v6
