@@ -17,7 +17,7 @@ test.beforeEach(async ({ page }) => {
     window.__TAURI__ = {
       core: { invoke },
       clipboardManager: { writeText: async () => {}, readText: async () => '', clear: async () => {} },
-      updater: { check: async () => null }, process: { relaunch: async () => {} }, app: { getVersion: async () => '0.2.0' },
+      updater: { check: async () => null }, process: { relaunch: async () => {} }, app: { getVersion: async () => '0.3.0' },
     }
   })
   await page.goto('/')
