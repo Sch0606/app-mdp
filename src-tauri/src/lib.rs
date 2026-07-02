@@ -2,7 +2,9 @@ mod store;
 
 use std::sync::Mutex;
 
-use store::{AuthStatus, CategoryMap, PasswordEntry, PasswordStore};
+use hmac::{Hmac, Mac};
+use sha1::Sha1;
+use store::{ActivityRecord, AuthStatus, CategoryMap, PasswordEntry, PasswordStore, TrashRecord};
 use tauri::{AppHandle, Manager, State};
 #[cfg(not(target_os = "macos"))]
 use tauri_plugin_biometry::{
@@ -239,6 +241,9 @@ fn ajouter(
     plateforme: String,
     email: String,
     mdp: String,
+    site: String,
+    notes: String,
+    totp_secret: String,
 ) -> Result<(), String> {
     state
         .store
@@ -250,6 +255,10 @@ fn ajouter(
                 plateforme,
                 email,
                 mdp,
+                site,
+                notes,
+                totp_secret,
+                ..Default::default()
             },
         )
         .map_err(|error| error.to_string())
@@ -263,6 +272,9 @@ fn modifier(
     plateforme: String,
     email: String,
     mdp: String,
+    site: String,
+    notes: String,
+    totp_secret: String,
 ) -> Result<(), String> {
     state
         .store
@@ -275,6 +287,10 @@ fn modifier(
                 plateforme,
                 email,
                 mdp,
+                site,
+                notes,
+                totp_secret,
+                ..Default::default()
             },
         )
         .map_err(|error| error.to_string())
@@ -340,6 +356,198 @@ fn generer() -> String {
 }
 
 #[tauri::command]
+fn charger_historique(state: State<AppState>) -> Result<Vec<ActivityRecord>, String> {
+    state
+        .store
+        .lock()
+        .map_err(|_| "Le coffre est indisponible.".to_string())?
+        .history()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn charger_corbeille(state: State<AppState>) -> Result<Vec<TrashRecord>, String> {
+    state
+        .store
+        .lock()
+        .map_err(|_| "Le coffre est indisponible.".to_string())?
+        .trash()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn restaurer_corbeille(state: State<AppState>, index: usize) -> Result<CategoryMap, String> {
+    state
+        .store
+        .lock()
+        .map_err(|_| "Le coffre est indisponible.".to_string())?
+        .restore_trash(index)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn vider_corbeille(state: State<AppState>) -> Result<(), String> {
+    state
+        .store
+        .lock()
+        .map_err(|_| "Le coffre est indisponible.".to_string())?
+        .empty_trash()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn supprimer_corbeille(state: State<AppState>, index: usize) -> Result<(), String> {
+    state
+        .store
+        .lock()
+        .map_err(|_| "Le coffre est indisponible.".to_string())?
+        .delete_trash(index)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn restaurer_historique(state: State<AppState>, index: usize) -> Result<CategoryMap, String> {
+    state
+        .store
+        .lock()
+        .map_err(|_| "Le coffre est indisponible.".to_string())?
+        .restore_history(index)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn definir_favori(
+    state: State<AppState>,
+    categorie: String,
+    index: usize,
+    favorite: bool,
+) -> Result<CategoryMap, String> {
+    state
+        .store
+        .lock()
+        .map_err(|_| "Le coffre est indisponible.".to_string())?
+        .set_favorite(categorie, index, favorite)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn marquer_consulte(state: State<AppState>, categorie: String, index: usize) -> Result<(), String> {
+    state
+        .store
+        .lock()
+        .map_err(|_| "Le coffre est indisponible.".to_string())?
+        .mark_accessed(categorie, index)
+        .map_err(|e| e.to_string())
+}
+
+fn parse_import(csv_text: &str) -> Result<Vec<PasswordEntry>, String> {
+    let mut reader = csv::ReaderBuilder::new()
+        .flexible(true)
+        .from_reader(csv_text.as_bytes());
+    let headers = reader.headers().map_err(|e| e.to_string())?.clone();
+    let find = |names: &[&str]| {
+        headers
+            .iter()
+            .position(|h| names.iter().any(|n| h.trim().eq_ignore_ascii_case(n)))
+    };
+    let name_i = find(&["name", "title", "service", "folder"]);
+    let url_i = find(&["url", "website", "origin", "login_uri", "login uri"]);
+    let user_i = find(&["username", "user", "login", "identifiant", "login_username"]);
+    let pass_i = find(&["password", "mot de passe", "login_password"])
+        .ok_or("Colonne de mot de passe introuvable.")?;
+    let mut entries = Vec::new();
+    for row in reader.records() {
+        let row = row.map_err(|e| e.to_string())?;
+        let get = |i: Option<usize>| i.and_then(|x| row.get(x)).unwrap_or("").trim().to_string();
+        let entry = PasswordEntry {
+            plateforme: get(name_i),
+            email: get(user_i),
+            mdp: row.get(pass_i).unwrap_or("").to_string(),
+            site: get(url_i),
+            ..Default::default()
+        };
+        if !entry.mdp.is_empty() || !entry.email.is_empty() {
+            entries.push(entry);
+        }
+    }
+    Ok(entries)
+}
+
+#[tauri::command]
+fn previsualiser_import(csv_text: String) -> Result<Vec<PasswordEntry>, String> {
+    parse_import(&csv_text)
+}
+
+#[tauri::command]
+fn importer_selection(
+    state: State<AppState>,
+    entries: Vec<PasswordEntry>,
+) -> Result<CategoryMap, String> {
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "Le coffre est indisponible.".to_string())?;
+    for entry in entries {
+        store
+            .add_password("Import navigateur".into(), entry)
+            .map_err(|e| e.to_string())?;
+    }
+    store.load().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn importer_navigateur(state: State<AppState>, csv_text: String) -> Result<CategoryMap, String> {
+    let entries = parse_import(&csv_text)?;
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "Le coffre est indisponible.".to_string())?;
+    for entry in entries {
+        store
+            .add_password("Import navigateur".into(), entry)
+            .map_err(|e| e.to_string())?;
+    }
+    store.load().map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+struct TotpCode {
+    code: String,
+    remaining: u64,
+}
+
+#[tauri::command]
+fn generer_totp(secret: String) -> Result<TotpCode, String> {
+    let normalized: String = secret
+        .trim()
+        .to_uppercase()
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '=')
+        .collect();
+    let key = data_encoding::BASE32_NOPAD
+        .decode(normalized.as_bytes())
+        .map_err(|_| "Secret TOTP invalide.".to_string())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs();
+    let counter = now / 30;
+    let mut mac =
+        Hmac::<Sha1>::new_from_slice(&key).map_err(|_| "Secret TOTP invalide.".to_string())?;
+    mac.update(&counter.to_be_bytes());
+    let bytes = mac.finalize().into_bytes();
+    let offset = (bytes[19] & 0x0f) as usize;
+    let value = (((bytes[offset] & 0x7f) as u32) << 24)
+        | ((bytes[offset + 1] as u32) << 16)
+        | ((bytes[offset + 2] as u32) << 8)
+        | bytes[offset + 3] as u32;
+    Ok(TotpCode {
+        code: format!("{:06}", value % 1_000_000),
+        remaining: 30 - now % 30,
+    })
+}
+
+#[tauri::command]
 fn exporter(state: State<AppState>, password: String) -> Result<String, String> {
     state
         .store
@@ -364,7 +572,10 @@ fn importer(
 }
 
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build());
     #[cfg(not(target_os = "macos"))]
     let builder = builder.plugin(tauri_plugin_biometry::init());
 
@@ -405,6 +616,18 @@ pub fn run() {
             renommer_categorie,
             supprimer_categorie,
             generer,
+            charger_historique,
+            charger_corbeille,
+            restaurer_corbeille,
+            vider_corbeille,
+            supprimer_corbeille,
+            restaurer_historique,
+            definir_favori,
+            marquer_consulte,
+            previsualiser_import,
+            importer_selection,
+            importer_navigateur,
+            generer_totp,
             exporter,
             importer
         ])

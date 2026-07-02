@@ -4,9 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Clave</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./style.css">
 </head>
 <body class="locked launching">
@@ -23,13 +20,13 @@
 <section class="lock-screen" id="lock-screen" aria-labelledby="lock-title">
     <div class="lock-card">
         <span class="brand-mark lock-mark">C</span>
-        <p class="eyebrow" id="lock-eyebrow">Securite locale</p>
-        <h2 id="lock-title">Creer le mot de passe maitre</h2>
+        <p class="eyebrow" id="lock-eyebrow">Sécurité locale</p>
+        <h2 id="lock-title">Créer le mot de passe maître</h2>
         <p class="lock-copy" id="lock-copy">Il protegera l'ouverture de Clave sur cet appareil.</p>
 
         <form id="lock-form" class="lock-form">
             <label>
-                <span>Mot de passe maitre</span>
+                <span>Mot de passe maître</span>
                 <span class="secret-field">
                     <input type="password" id="master-password" autocomplete="current-password" minlength="8">
                     <button class="toggle-secret" type="button" aria-label="Afficher le secret" title="Afficher le secret">
@@ -39,7 +36,7 @@
             </label>
             <p class="lock-error" id="lock-error" role="alert"></p>
             <button class="btn-ajouter lock-submit" id="lock-submit" type="submit">Continuer</button>
-            <button class="btn-secondary lock-submit" id="biometry-unlock" type="button" hidden>Utiliser la biometrie</button>
+            <button class="btn-secondary lock-submit" id="biometry-unlock" type="button" hidden>Utiliser la biométrie</button>
         </form>
     </div>
 </section>
@@ -84,11 +81,13 @@
             <input type="search" id="search-input" placeholder="Service, identifiant, espace">
         </label>
         <div class="toolbar-actions">
+            <button class="btn-ajouter" id="new-access" type="button">+ Nouvel accès</button>
             <button class="btn-secondary" id="lock-now" type="button">Verrouiller</button>
         </div>
     </section>
 
-    <section class="entry-panel" aria-label="Ajouter un accès">
+    <section class="entry-panel entry-drawer" id="entry-drawer" aria-label="Nouvel accès" hidden>
+        <div class="drawer-heading"><div><p class="eyebrow">Coffre</p><h3 id="entry-drawer-title">Nouvel accès</h3></div><button class="mini-action" id="close-entry-drawer" type="button">Fermer</button></div>
         <div class="ligne form-row">
             <label>
                 <span>Service</span>
@@ -109,20 +108,25 @@
             </label>
             <button id="generer" type="button">Générer</button>
         </div>
+        <div class="entry-details">
+            <label><span>Site web</span><input type="url" id="entry-site" placeholder="https://exemple.com"></label>
+            <label><span>Secret TOTP</span><input type="text" id="entry-totp" placeholder="Clé Base32"></label>
+            <label class="entry-notes"><span>Notes</span><textarea id="entry-notes" rows="3" placeholder="Informations complémentaires"></textarea></label>
+        </div>
         <div class="panel-actions">
             <div class="strength">
-                <span id="strength-label">Force non mesuree</span>
+                <span id="strength-label">Force non mesurée</span>
                 <span class="strength-track"><span id="strength-bar"></span></span>
             </div>
             <button class="btn-ajouter" type="button">Enregistrer</button>
         </div>
     </section>
 
-    <section class="tools-grid generator-collapsed" aria-label="Outils de securite">
+    <section class="tools-grid generator-collapsed" aria-label="Outils de sécurité">
         <article class="tool-panel">
             <div class="tool-heading">
-                <p class="section-label">Generateur</p>
-                <output id="generator-output">Pret</output>
+                <p class="section-label">Générateur</p>
+                <output id="generator-output">Prêt</output>
             </div>
             <label class="range-field">
                 <span>Longueur <strong id="generator-length-value">20</strong></span>
@@ -140,113 +144,97 @@
                 <span id="audit-score">0 alerte</span>
             </div>
             <ul id="audit-list"></ul>
+            <button class="btn-secondary" id="check-breaches" type="button">Vérifier les mots de passe compromis</button>
         </article>
     </section>
 
     <section class="vault-list" aria-label="Accès enregistrés">
         <div class="list-heading">
-            <p class="section-label">Accès</p>
+            <div class="vault-tabs" role="tablist">
+                <span class="vault-tab-selection" aria-hidden="true"></span>
+                <button class="vault-tab active" type="button" data-view="access">Accès</button>
+                <button class="vault-tab" type="button" data-view="history">Historique</button>
+                <button class="vault-tab" type="button" data-view="trash">Poubelle</button>
+            </div>
+            <button class="mini-action" id="empty-trash" type="button" hidden>Vider la poubelle</button>
         </div>
+        <div class="quick-filters">
+            <button class="mini-action" id="filter-favorites" type="button">★ Favoris</button>
+            <button class="mini-action" id="filter-recent" type="button">Récents</button>
+        </div>
+        <div class="empty-vault" id="empty-vault" hidden><span>◇</span><h3>Votre coffre est vide</h3><p>Ajoutez votre premier accès ou importez vos mots de passe.</p><div><button class="btn-ajouter" id="empty-new-access" type="button">Nouvel accès</button><button class="btn-secondary" id="empty-import" type="button">Importer</button></div></div>
         <div id="liste-mdp"></div>
     </section>
 </main>
 
 <div id="toast" role="status" aria-live="polite"></div>
 <input type="file" id="import-file" accept="application/json,.json" hidden>
+<input type="file" id="browser-import-file" accept="text/csv,.csv" hidden>
 
-<button class="settings-button" id="settings-button" type="button" aria-expanded="false" aria-controls="settings-page" title="Parametres">
+<button class="settings-button" id="settings-button" type="button" aria-expanded="false" aria-controls="settings-page" title="Paramètres">
     ⚙
 </button>
 
-<main class="settings-page" id="settings-page" hidden aria-label="Parametres">
+<main class="settings-page" id="settings-page" hidden aria-label="Paramètres">
     <header class="settings-page-header">
         <button class="btn-secondary" id="close-settings" type="button">Retour au coffre</button>
         <div>
             <p class="eyebrow">Clave</p>
-            <h3>Parametres</h3>
-            <p>Controle la securite, l'interface et les sauvegardes du coffre.</p>
+            <h3>Paramètres</h3>
         </div>
     </header>
 
-    <section class="settings-layout">
-        <article class="settings-card">
-            <div>
-                <p class="section-label">Securite</p>
-                <h4>Verrouillage</h4>
-            </div>
-            <button class="btn-ajouter" id="settings-lock-now" type="button">Verrouiller maintenant</button>
-            <label class="settings-field">
-                <span>Verrouillage automatique</span>
-                <select id="auto-lock-delay">
-                    <option value="120000">2 minutes</option>
-                    <option value="300000">5 minutes</option>
-                    <option value="600000">10 minutes</option>
-                    <option value="0">Desactive</option>
-                </select>
-            </label>
-            <div class="settings-field">
-                <span>Touche de verrouillage</span>
-                <div class="hotkey-row">
-                    <output id="lock-hotkey-display">Aucune</output>
-                    <button class="btn-secondary" id="record-lock-hotkey" type="button">Definir</button>
-                    <button class="mini-action" id="clear-lock-hotkey" type="button">Retirer</button>
-                </div>
-            </div>
-            <div class="settings-field" id="biometry-settings">
-                <span>Biometrie</span>
-                <p class="settings-feedback" id="biometry-status">Verification...</p>
-                <input type="password" id="biometry-master-password" placeholder="Mot de passe maitre" autocomplete="current-password">
-                <div class="settings-actions">
-                    <button class="btn-secondary" id="enable-biometry" type="button">Activer</button>
-                    <button class="mini-action" id="disable-biometry" type="button">Desactiver</button>
-                </div>
-            </div>
-        </article>
+    <section class="settings-shell">
+        <nav class="settings-nav" aria-label="Sections des paramètres">
+            <span class="settings-nav-indicator" aria-hidden="true"></span>
+            <button class="active" type="button" data-settings-section="security">Sécurité</button>
+            <button type="button" data-settings-section="interface">Interface</button>
+            <button type="button" data-settings-section="backup">Sauvegarde</button>
+            <button type="button" data-settings-section="shortcuts">Raccourcis</button>
+            <button type="button" data-settings-section="about">À propos</button>
+        </nav>
 
-        <form class="settings-card" id="change-master-form">
-            <div>
-                <p class="section-label">Mot de passe maitre</p>
-                <h4>Changer l'acces au coffre</h4>
-            </div>
-            <label class="settings-field">
-                <span>Ancien mot de passe</span>
-                <input type="password" id="old-master-password" autocomplete="current-password">
-            </label>
-            <label class="settings-field">
-                <span>Nouveau mot de passe</span>
-                <input type="password" id="new-master-password" autocomplete="new-password" minlength="8">
-            </label>
-            <label class="settings-field">
-                <span>Confirmer</span>
-                <input type="password" id="confirm-new-master-password" autocomplete="new-password" minlength="8">
-            </label>
-            <p class="settings-feedback" id="settings-feedback" role="status"></p>
-            <button class="btn-secondary" type="submit">Changer le mot de passe</button>
-        </form>
+        <div class="settings-layout">
+            <section class="settings-panel active" data-settings-panel="security">
+                <article class="settings-card">
+                    <div><p class="section-label">Sécurité</p><h4>Verrouillage automatique</h4></div>
+                    <button class="btn-ajouter" id="settings-lock-now" type="button">Verrouiller maintenant</button>
+                    <fieldset class="settings-field delay-setting" id="auto-lock-delay">
+                        <legend>Délai avant verrouillage</legend>
+                        <div class="delay-options"><span class="delay-selection" aria-hidden="true"></span><label><input type="radio" name="auto-lock-delay" value="120000"><span>2 min</span></label><label><input type="radio" name="auto-lock-delay" value="300000"><span>5 min</span></label><label><input type="radio" name="auto-lock-delay" value="600000"><span>10 min</span></label><label><input type="radio" name="auto-lock-delay" value="0"><span>Jamais</span></label></div>
+                    </fieldset>
+                    <div class="settings-field" id="biometry-settings"><span>Authentification biométrique</span><p class="settings-feedback" id="biometry-status">Vérification...</p><input type="password" id="biometry-master-password" placeholder="Mot de passe maître" autocomplete="current-password"><div class="settings-actions"><button class="btn-secondary" id="enable-biometry" type="button">Activer</button><button class="mini-action" id="disable-biometry" type="button">Désactiver</button></div></div>
+                    <label class="settings-field"><span>Effacement du presse-papiers</span><select id="clipboard-clear-delay"><option value="15000">Après 15 secondes</option><option value="30000" selected>Après 30 secondes</option><option value="60000">Après 1 minute</option><option value="0">Jamais</option></select></label>
+                </article>
+                <form class="settings-card" id="change-master-form">
+                    <div><p class="section-label">Mot de passe maître</p><h4>Modifier l’accès au coffre</h4></div>
+                    <label class="settings-field"><span>Ancien mot de passe</span><input type="password" id="old-master-password" autocomplete="current-password"></label>
+                    <label class="settings-field"><span>Nouveau mot de passe</span><input type="password" id="new-master-password" autocomplete="new-password" minlength="8"></label>
+                    <label class="settings-field"><span>Confirmer</span><input type="password" id="confirm-new-master-password" autocomplete="new-password" minlength="8"></label>
+                    <p class="settings-feedback" id="settings-feedback" role="status"></p><button class="btn-secondary" type="submit">Enregistrer le mot de passe</button>
+                </form>
+            </section>
 
-        <article class="settings-card">
-            <div>
-                <p class="section-label">Interface</p>
-                <h4>Barre d'actions</h4>
-            </div>
-            <label class="settings-toggle">
-                <input type="checkbox" id="toggle-toolbar-lock" checked>
-                <span>Afficher le bouton Verrouiller dans la barre du haut</span>
-            </label>
-        </article>
-
-        <article class="settings-card">
-            <div>
-                <p class="section-label">Sauvegarde</p>
-                <h4>Import et export</h4>
-            </div>
-            <div class="settings-actions">
-                <button class="btn-secondary" id="settings-export-vault" type="button">Exporter</button>
-                <button class="btn-secondary" id="settings-import-vault" type="button">Importer</button>
-            </div>
-        </article>
+            <section class="settings-panel" data-settings-panel="interface" hidden><article class="settings-card"><div><p class="section-label">Interface</p><h4>Barre d’actions</h4></div><label class="settings-switch"><span class="settings-switch-copy"><strong>Bouton Verrouiller</strong><small>Afficher l’action dans la barre du haut</small></span><span class="settings-switch-control"><input type="checkbox" id="toggle-toolbar-lock" checked><span aria-hidden="true"></span></span></label></article></section>
+            <section class="settings-panel" data-settings-panel="backup" hidden><article class="settings-card"><div><p class="section-label">Sauvegarde</p><h4>Import et export</h4></div><div class="settings-actions"><button class="btn-secondary" id="settings-export-vault" type="button">Exporter</button><button class="btn-secondary" id="settings-import-vault" type="button">Importer</button><button class="btn-secondary" id="settings-import-browser" type="button">Importer depuis un navigateur</button></div></article></section>
+            <section class="settings-panel" data-settings-panel="shortcuts" hidden><article class="settings-card"><div><p class="section-label">Raccourcis</p><h4>Verrouillage rapide</h4></div><div class="settings-field"><span>Touche de verrouillage</span><div class="hotkey-row"><output id="lock-hotkey-display">Aucune</output><button class="btn-secondary" id="record-lock-hotkey" type="button">Définir</button><button class="mini-action" id="clear-lock-hotkey" type="button">Retirer</button></div></div></article></section>
+            <section class="settings-panel" data-settings-panel="about" hidden><article class="settings-card about-card"><div><p class="section-label">À propos</p><h4>Clave <span id="app-version">...</span></h4></div><p class="settings-feedback" id="update-status">Version installée.</p><div class="settings-actions"><button class="btn-secondary" id="check-update" type="button">Rechercher une mise à jour</button><button class="btn-ajouter" id="install-update" type="button" hidden>Installer puis redémarrer</button></div></article></section>
+        </div>
     </section>
 </main>
+
+<div class="context-menu entry-context-menu" id="entry-menu" role="menu" aria-hidden="true">
+    <button type="button" id="entry-menu-edit" role="menuitem"><span>✎</span>Modifier</button>
+    <button type="button" id="entry-menu-copy-email" role="menuitem"><span>⧉</span>Copier l’identifiant</button>
+    <button type="button" id="entry-menu-copy" role="menuitem">
+        <span>⧉</span>
+        Copier le mot de passe
+    </button>
+    <button type="button" id="entry-menu-delete" class="danger" role="menuitem">
+        <span>×</span>
+        Supprimer
+    </button>
+</div>
 
 <div class="context-menu" id="category-menu" role="menu" aria-hidden="true">
     <button type="button" id="menu-rename" role="menuitem">
@@ -302,6 +290,24 @@
             <button class="btn-secondary" id="cancel-backup" type="button">Annuler</button>
             <button class="btn-ajouter" id="confirm-backup" type="button">Valider</button>
         </div>
+    </section>
+</div>
+
+<div class="modal-backdrop command-backdrop" id="command-palette" aria-hidden="true">
+    <section class="modal command-modal" role="dialog" aria-modal="true" aria-labelledby="command-title">
+        <p class="eyebrow">Recherche rapide</p><h3 id="command-title">Trouver un accès</h3>
+        <input type="search" id="command-search" placeholder="Service, identifiant ou espace" autocomplete="off">
+        <div class="command-results" id="command-results"></div>
+        <p class="command-hint">↑ ↓ naviguer · Entrée ouvrir · Échap fermer</p>
+    </section>
+</div>
+
+<div class="modal-backdrop" id="import-preview-modal" aria-hidden="true">
+    <section class="modal import-preview" role="dialog" aria-modal="true" aria-labelledby="import-preview-title">
+        <p class="eyebrow">Import sécurisé</p><h3 id="import-preview-title">Accès détectés</h3>
+        <p class="modal-copy">Sélectionnez les accès à importer. Supprimez ensuite le fichier CSV, car il contient vos mots de passe en clair.</p>
+        <div id="import-preview-list"></div>
+        <div class="modal-actions"><button class="btn-secondary" id="cancel-import-preview" type="button">Annuler</button><button class="btn-ajouter" id="confirm-import-preview" type="button">Importer la sélection</button></div>
     </section>
 </div>
 

@@ -1,6 +1,6 @@
 {
   "name": "clave",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,12 +10,17 @@
     "build:mac-local": "tauri build --bundles app --target universal-apple-darwin",
     "build:mac-dmg": "tauri build --bundles dmg --target universal-apple-darwin",
     "icons": "tauri icon src-tauri/icons/icon.png",
-    "check": "cargo test --manifest-path src-tauri/Cargo.toml"
+    "check": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:e2e": "playwright test tests/e2e"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.9.0"
+    "@tauri-apps/api": "^2.9.0",
+    "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.9.0"
+    "@tauri-apps/cli": "^2.9.0",
+    "@playwright/test": "^1.53.0"
   }
 }
