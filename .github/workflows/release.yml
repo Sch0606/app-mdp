@@ -10,79 +10,44 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
 jobs:
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: Windows
             os: windows-latest
-            bundles: nsis
-            build-command: npm run tauri -- build --bundles nsis
-            asset-source: src-tauri/target/release/bundle/nsis/*.exe
+            args: --bundles nsis
           - name: macOS
             os: macos-latest
-            bundles: dmg
-            build-command: npm run tauri -- build --bundles dmg --target universal-apple-darwin
-            asset-source: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            args: --bundles dmg --target universal-apple-darwin
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Setup Node
-        uses: actions/setup-node@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Generate Tauri icons
-        run: npm run icons
-
-      - name: Install macOS universal targets
-        if: runner.os == 'macOS'
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: npm run icons
+      - if: runner.os == 'macOS'
         run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
-
-      - name: Run Rust tests
-        run: npm run check
-
-      - name: Build Tauri bundle
-        run: ${{ matrix.build-command }}
-
-      - name: Collect release files
-        shell: bash
-        run: |
-          mkdir -p dist
-          shopt -s nullglob
-          files=( ${{ matrix.asset-source }} )
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No release files found for pattern: ${{ matrix.asset-source }}"
-            find src-tauri/target -path "*/bundle/*" -type f || true
-            exit 1
-          fi
-          cp "${files[@]}" dist/
-          ls -la dist
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v6
+      - run: npm run check
+      - uses: tauri-apps/tauri-action@v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: clave-${{ matrix.name }}
-          path: dist/*
-          if-no-files-found: error
-
-      - name: Attach files to GitHub release
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v3
-        with:
-          files: dist/*
+          tagName: v__VERSION__
+          releaseName: Clave v__VERSION__
+          releaseBody: Consultez les notes de version pour connaitre les changements.
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
+          uploadUpdaterSignatures: true

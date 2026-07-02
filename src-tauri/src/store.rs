@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -12,17 +17,56 @@ use sha2::Sha256;
 use thiserror::Error;
 
 const AUTH_VERSION: u8 = 1;
-const VAULT_VERSION: u8 = 2;
+const VAULT_VERSION: u8 = 3;
 const KDF_ITERATIONS: u32 = 210_000;
 const AUTH_VERIFIER: &[u8] = b"clave-auth-v1";
+pub const PURGE_AFTER_SECONDS: u64 = 30 * 24 * 60 * 60;
 
 pub type CategoryMap = BTreeMap<String, Vec<PasswordEntry>>;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PasswordEntry {
     pub plateforme: String,
     pub email: String,
     pub mdp: String,
+    #[serde(default)]
+    pub site: String,
+    #[serde(default)]
+    pub notes: String,
+    #[serde(default)]
+    pub totp_secret: String,
+    #[serde(default)]
+    pub favorite: bool,
+    #[serde(default)]
+    pub created_at: u64,
+    #[serde(default)]
+    pub updated_at: u64,
+    #[serde(default)]
+    pub last_accessed: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ActivityRecord {
+    pub categorie: String,
+    pub action: String,
+    pub entry: PasswordEntry,
+    pub timestamp: u64,
+    #[serde(default)]
+    pub entry_index: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TrashRecord {
+    pub categorie: String,
+    pub entry: PasswordEntry,
+    pub timestamp: u64,
+}
+
+#[derive(Default)]
+struct VaultState {
+    categories: CategoryMap,
+    history: Vec<ActivityRecord>,
+    trash: Vec<TrashRecord>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +99,10 @@ struct EncryptedVault {
     version: u8,
     encrypted: bool,
     categories: BTreeMap<String, Vec<EncryptedEntry>>,
+    #[serde(default)]
+    history: Vec<EncryptedActivityRecord>,
+    #[serde(default)]
+    trash: Vec<EncryptedTrashRecord>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -62,6 +110,36 @@ struct EncryptedEntry {
     plateforme: String,
     email: String,
     mdp: String,
+    #[serde(default)]
+    site: String,
+    #[serde(default)]
+    notes: String,
+    #[serde(default)]
+    totp_secret: String,
+    #[serde(default)]
+    favorite: bool,
+    #[serde(default)]
+    created_at: u64,
+    #[serde(default)]
+    updated_at: u64,
+    #[serde(default)]
+    last_accessed: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct EncryptedActivityRecord {
+    categorie: String,
+    action: String,
+    entry: EncryptedEntry,
+    timestamp: u64,
+    #[serde(default)]
+    entry_index: usize,
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct EncryptedTrashRecord {
+    categorie: String,
+    entry: EncryptedEntry,
+    timestamp: u64,
 }
 
 #[derive(Debug, Error)]
@@ -174,6 +252,10 @@ impl PasswordStore {
     }
 
     pub fn load(&self) -> Result<CategoryMap, StoreError> {
+        Ok(self.load_state()?.categories)
+    }
+
+    fn load_state(&self) -> Result<VaultState, StoreError> {
         if self.auth_file.exists() {
             self.require_key()?;
         }
@@ -181,7 +263,7 @@ impl PasswordStore {
         let raw = self.read_raw()?;
 
         if raw.trim().is_empty() {
-            return Ok(CategoryMap::new());
+            return Ok(VaultState::default());
         }
 
         let value: serde_json::Value = serde_json::from_str(&raw)?;
@@ -191,53 +273,284 @@ impl PasswordStore {
             .unwrap_or(false)
         {
             let vault: EncryptedVault = serde_json::from_value(value)?;
-            return self.decrypt_categories(vault.categories);
+            let categories = self.decrypt_categories(vault.categories)?;
+            let history = vault
+                .history
+                .into_iter()
+                .map(|r| {
+                    Ok(ActivityRecord {
+                        categorie: r.categorie,
+                        action: r.action,
+                        entry: self.decrypt_entry(r.entry)?,
+                        timestamp: r.timestamp,
+                        entry_index: r.entry_index,
+                    })
+                })
+                .collect::<Result<Vec<_>, StoreError>>()?;
+            let trash = vault
+                .trash
+                .into_iter()
+                .map(|r| {
+                    Ok(TrashRecord {
+                        categorie: r.categorie,
+                        entry: self.decrypt_entry(r.entry)?,
+                        timestamp: r.timestamp,
+                    })
+                })
+                .collect::<Result<Vec<_>, StoreError>>()?;
+            let mut state = VaultState {
+                categories,
+                history,
+                trash,
+            };
+            let now = Self::now();
+            for entries in state.categories.values_mut() {
+                for entry in entries {
+                    if entry.created_at == 0 {
+                        entry.created_at = now;
+                    }
+                    if entry.updated_at == 0 {
+                        entry.updated_at = entry.created_at;
+                    }
+                }
+            }
+            state
+                .trash
+                .retain(|item| now.saturating_sub(item.timestamp) < PURGE_AFTER_SECONDS);
+            return Ok(state);
         }
 
         let plaintext: CategoryMap = serde_json::from_str(&raw)?;
-        self.save(&plaintext)?;
-        Ok(plaintext)
+        let state = VaultState {
+            categories: plaintext,
+            ..Default::default()
+        };
+        self.save_state(&state)?;
+        Ok(state)
     }
 
     pub fn save(&self, categories: &CategoryMap) -> Result<(), StoreError> {
+        let mut state = self.load_state().unwrap_or_default();
+        state.categories = categories.clone();
+        self.save_state(&state)
+    }
+
+    fn save_state(&self, state: &VaultState) -> Result<(), StoreError> {
         let vault = EncryptedVault {
             version: VAULT_VERSION,
             encrypted: true,
-            categories: self.encrypt_categories(categories)?,
+            categories: self.encrypt_categories(&state.categories)?,
+            history: state
+                .history
+                .iter()
+                .map(|r| {
+                    Ok(EncryptedActivityRecord {
+                        categorie: r.categorie.clone(),
+                        action: r.action.clone(),
+                        entry: self.encrypt_entry(&r.entry)?,
+                        timestamp: r.timestamp,
+                        entry_index: r.entry_index,
+                    })
+                })
+                .collect::<Result<Vec<_>, StoreError>>()?,
+            trash: state
+                .trash
+                .iter()
+                .map(|r| {
+                    Ok(EncryptedTrashRecord {
+                        categorie: r.categorie.clone(),
+                        entry: self.encrypt_entry(&r.entry)?,
+                        timestamp: r.timestamp,
+                    })
+                })
+                .collect::<Result<Vec<_>, StoreError>>()?,
         };
         self.write_json(&vault)
     }
 
-    pub fn add_password(&self, categorie: String, entry: PasswordEntry) -> Result<(), StoreError> {
-        let mut categories = self.load()?;
-        categories.entry(categorie).or_default().push(entry);
-        self.save(&categories)
+    pub fn add_password(
+        &self,
+        categorie: String,
+        mut entry: PasswordEntry,
+    ) -> Result<(), StoreError> {
+        let mut state = self.load_state()?;
+        let now = Self::now();
+        if entry.created_at == 0 {
+            entry.created_at = now;
+        }
+        entry.updated_at = now;
+        let entry_index = state.categories.get(&categorie).map_or(0, Vec::len);
+        state
+            .categories
+            .entry(categorie.clone())
+            .or_default()
+            .push(entry.clone());
+        state.history.push(ActivityRecord {
+            categorie,
+            action: "creation".into(),
+            entry,
+            timestamp: now,
+            entry_index,
+        });
+        self.save_state(&state)
     }
 
     pub fn update_password(
         &self,
         categorie: String,
         index: usize,
-        entry: PasswordEntry,
+        mut entry: PasswordEntry,
     ) -> Result<(), StoreError> {
-        let mut categories = self.load()?;
-        let entries = categories.get_mut(&categorie).ok_or(StoreError::NotFound)?;
+        let mut state = self.load_state()?;
+        let entries = state
+            .categories
+            .get_mut(&categorie)
+            .ok_or(StoreError::NotFound)?;
         let current = entries.get_mut(index).ok_or(StoreError::NotFound)?;
-
+        let previous = current.clone();
+        entry.created_at = previous.created_at;
+        entry.updated_at = Self::now();
+        entry.last_accessed = previous.last_accessed;
+        entry.favorite = previous.favorite;
         *current = entry;
-        self.save(&categories)
+        state.history.push(ActivityRecord {
+            categorie,
+            action: "modification".into(),
+            entry: previous,
+            timestamp: Self::now(),
+            entry_index: index,
+        });
+        self.save_state(&state)
     }
 
     pub fn delete_password(&self, categorie: String, index: usize) -> Result<(), StoreError> {
-        let mut categories = self.load()?;
-        let entries = categories.get_mut(&categorie).ok_or(StoreError::NotFound)?;
+        let mut state = self.load_state()?;
+        let entries = state
+            .categories
+            .get_mut(&categorie)
+            .ok_or(StoreError::NotFound)?;
 
         if index >= entries.len() {
             return Err(StoreError::NotFound);
         }
 
-        entries.remove(index);
-        self.save(&categories)
+        let entry = entries.remove(index);
+        let timestamp = Self::now();
+        state.history.push(ActivityRecord {
+            categorie: categorie.clone(),
+            action: "suppression".into(),
+            entry: entry.clone(),
+            timestamp,
+            entry_index: index,
+        });
+        state.trash.push(TrashRecord {
+            categorie,
+            entry,
+            timestamp,
+        });
+        self.save_state(&state)
+    }
+
+    pub fn history(&self) -> Result<Vec<ActivityRecord>, StoreError> {
+        Ok(self.load_state()?.history)
+    }
+    pub fn trash(&self) -> Result<Vec<TrashRecord>, StoreError> {
+        Ok(self.load_state()?.trash)
+    }
+    pub fn restore_trash(&self, index: usize) -> Result<CategoryMap, StoreError> {
+        let mut state = self.load_state()?;
+        if index >= state.trash.len() {
+            return Err(StoreError::NotFound);
+        }
+        let item = state.trash.remove(index);
+        state
+            .categories
+            .entry(item.categorie.clone())
+            .or_default()
+            .push(item.entry.clone());
+        let entry_index = state
+            .categories
+            .get(&item.categorie)
+            .map_or(0, |entries| entries.len().saturating_sub(1));
+        state.history.push(ActivityRecord {
+            categorie: item.categorie,
+            action: "restauration".into(),
+            entry: item.entry,
+            timestamp: Self::now(),
+            entry_index,
+        });
+        self.save_state(&state)?;
+        Ok(state.categories)
+    }
+
+    pub fn empty_trash(&self) -> Result<(), StoreError> {
+        let mut state = self.load_state()?;
+        state.trash.clear();
+        self.save_state(&state)
+    }
+
+    pub fn delete_trash(&self, index: usize) -> Result<(), StoreError> {
+        let mut state = self.load_state()?;
+        if index >= state.trash.len() {
+            return Err(StoreError::NotFound);
+        }
+        state.trash.remove(index);
+        self.save_state(&state)
+    }
+
+    pub fn restore_history(&self, index: usize) -> Result<CategoryMap, StoreError> {
+        let mut state = self.load_state()?;
+        let item = state
+            .history
+            .get(index)
+            .cloned()
+            .ok_or(StoreError::NotFound)?;
+        let entries = state.categories.entry(item.categorie.clone()).or_default();
+        let mut restored = item.entry.clone();
+        restored.updated_at = Self::now();
+        if item.entry_index < entries.len() {
+            entries[item.entry_index] = restored.clone();
+        } else {
+            entries.push(restored.clone());
+        }
+        state.history.push(ActivityRecord {
+            categorie: item.categorie,
+            action: "restauration historique".into(),
+            entry: restored,
+            timestamp: Self::now(),
+            entry_index: item.entry_index,
+        });
+        self.save_state(&state)?;
+        Ok(state.categories)
+    }
+
+    pub fn set_favorite(
+        &self,
+        categorie: String,
+        index: usize,
+        favorite: bool,
+    ) -> Result<CategoryMap, StoreError> {
+        let mut state = self.load_state()?;
+        let entry = state
+            .categories
+            .get_mut(&categorie)
+            .and_then(|entries| entries.get_mut(index))
+            .ok_or(StoreError::NotFound)?;
+        entry.favorite = favorite;
+        entry.updated_at = Self::now();
+        self.save_state(&state)?;
+        Ok(state.categories)
+    }
+
+    pub fn mark_accessed(&self, categorie: String, index: usize) -> Result<(), StoreError> {
+        let mut state = self.load_state()?;
+        let entry = state
+            .categories
+            .get_mut(&categorie)
+            .and_then(|entries| entries.get_mut(index))
+            .ok_or(StoreError::NotFound)?;
+        entry.last_accessed = Self::now();
+        self.save_state(&state)
     }
 
     pub fn add_category(&self, categorie: String) -> Result<(), StoreError> {
@@ -384,13 +697,7 @@ impl PasswordStore {
         for (category, entries) in categories {
             let encrypted_entries = entries
                 .iter()
-                .map(|entry| {
-                    Ok(EncryptedEntry {
-                        plateforme: entry.plateforme.clone(),
-                        email: entry.email.clone(),
-                        mdp: self.encrypt_text(&entry.mdp)?,
-                    })
-                })
+                .map(|entry| self.encrypt_entry(entry))
                 .collect::<Result<Vec<_>, StoreError>>()?;
 
             encrypted.insert(category.clone(), encrypted_entries);
@@ -408,19 +715,58 @@ impl PasswordStore {
         for (category, entries) in categories {
             let decrypted_entries = entries
                 .into_iter()
-                .map(|entry| {
-                    Ok(PasswordEntry {
-                        plateforme: entry.plateforme,
-                        email: entry.email,
-                        mdp: self.decrypt_text(&entry.mdp)?,
-                    })
-                })
+                .map(|entry| self.decrypt_entry(entry))
                 .collect::<Result<Vec<_>, StoreError>>()?;
 
             decrypted.insert(category, decrypted_entries);
         }
 
         Ok(decrypted)
+    }
+
+    fn encrypt_entry(&self, entry: &PasswordEntry) -> Result<EncryptedEntry, StoreError> {
+        Ok(EncryptedEntry {
+            plateforme: entry.plateforme.clone(),
+            email: entry.email.clone(),
+            mdp: self.encrypt_text(&entry.mdp)?,
+            site: entry.site.clone(),
+            notes: self.encrypt_text(&entry.notes)?,
+            totp_secret: self.encrypt_text(&entry.totp_secret)?,
+            favorite: entry.favorite,
+            created_at: entry.created_at,
+            updated_at: entry.updated_at,
+            last_accessed: entry.last_accessed,
+        })
+    }
+
+    fn decrypt_entry(&self, entry: EncryptedEntry) -> Result<PasswordEntry, StoreError> {
+        Ok(PasswordEntry {
+            plateforme: entry.plateforme,
+            email: entry.email,
+            mdp: self.decrypt_text(&entry.mdp)?,
+            site: entry.site,
+            notes: if entry.notes.is_empty() {
+                String::new()
+            } else {
+                self.decrypt_text(&entry.notes)?
+            },
+            totp_secret: if entry.totp_secret.is_empty() {
+                String::new()
+            } else {
+                self.decrypt_text(&entry.totp_secret)?
+            },
+            favorite: entry.favorite,
+            created_at: entry.created_at,
+            updated_at: entry.updated_at,
+            last_accessed: entry.last_accessed,
+        })
+    }
+
+    fn now() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
     }
 
     fn encrypt_text(&self, text: &str) -> Result<String, StoreError> {
@@ -563,6 +909,7 @@ mod tests {
                     plateforme: "Gmail".to_string(),
                     email: "user@example.com".to_string(),
                     mdp: "secret-123".to_string(),
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -624,6 +971,7 @@ mod tests {
                     plateforme: "Gmail".to_string(),
                     email: "user@example.com".to_string(),
                     mdp: "secret-123".to_string(),
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -666,6 +1014,7 @@ mod tests {
                     plateforme: "Gmail".to_string(),
                     email: "user@example.com".to_string(),
                     mdp: "secret-123".to_string(),
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -709,6 +1058,7 @@ mod tests {
                     plateforme: "Gmail".to_string(),
                     email: "user@example.com".to_string(),
                     mdp: "secret-123".to_string(),
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -721,6 +1071,7 @@ mod tests {
                     plateforme: "GitHub".to_string(),
                     email: "dev@example.com".to_string(),
                     mdp: "better-secret-456".to_string(),
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -745,6 +1096,7 @@ mod tests {
                     plateforme: "Mail".to_string(),
                     email: "me@example.com".to_string(),
                     mdp: "secret-123".to_string(),
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -765,5 +1117,64 @@ mod tests {
 
         assert_eq!(imported["Perso"][0].plateforme, "Mail");
         assert_eq!(imported["Perso"][0].mdp, "secret-123");
+    }
+
+    #[test]
+    fn history_favorites_and_trash_lifecycle_are_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = unlocked_store(dir.path());
+        store
+            .add_password(
+                "Perso".into(),
+                PasswordEntry {
+                    plateforme: "Google".into(),
+                    email: "a@b.fr".into(),
+                    mdp: "first".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store.set_favorite("Perso".into(), 0, true).unwrap();
+        store
+            .update_password(
+                "Perso".into(),
+                0,
+                PasswordEntry {
+                    plateforme: "Google".into(),
+                    email: "a@b.fr".into(),
+                    mdp: "second".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(store.load().unwrap()["Perso"][0].favorite);
+        assert_eq!(store.load().unwrap()["Perso"][0].mdp, "second");
+        store.restore_history(1).unwrap();
+        assert_eq!(store.load().unwrap()["Perso"][0].mdp, "first");
+        store.delete_password("Perso".into(), 0).unwrap();
+        assert_eq!(store.trash().unwrap().len(), 1);
+        store.delete_trash(0).unwrap();
+        assert!(store.trash().unwrap().is_empty());
+    }
+
+    #[test]
+    fn trash_older_than_thirty_days_is_purged() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = unlocked_store(dir.path());
+        store
+            .add_password(
+                "Perso".into(),
+                PasswordEntry {
+                    plateforme: "Ancien".into(),
+                    mdp: "secret".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store.delete_password("Perso".into(), 0).unwrap();
+        let mut state = store.load_state().unwrap();
+        state.trash[0].timestamp = PasswordStore::now() - PURGE_AFTER_SECONDS - 1;
+        store.save_state(&state).unwrap();
+        assert!(store.trash().unwrap().is_empty());
     }
 }
