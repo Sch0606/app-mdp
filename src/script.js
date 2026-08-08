@@ -131,7 +131,7 @@ function ouvrirParametres() {
     button.setAttribute('aria-expanded', 'true')
     ouvrirSectionParametres('security')
     synchroniserDelaiVerrouillage(inactivityMs)
-    document.getElementById('clipboard-clear-delay').value = String(clipboardClearMs)
+    synchroniserDelaiPressePapiers(clipboardClearMs)
 }
 
 function fermerParametres() {
@@ -257,7 +257,19 @@ function synchroniserDelaiVerrouillage(value) {
     options.forEach(function(option, index) {
         option.checked = index === selectedIndex
     })
-    document.querySelector('.delay-options').style.setProperty('--selected-index', String(selectedIndex))
+    document.querySelector('.auto-lock-options').style.setProperty('--selected-index', String(selectedIndex))
+}
+
+function synchroniserDelaiPressePapiers(value) {
+    const options = Array.from(document.querySelectorAll('input[name="clipboard-clear-delay"]'))
+    const selectedIndex = Math.max(0, options.findIndex(function(option) {
+        return option.value === String(value)
+    }))
+
+    options.forEach(function(option, index) {
+        option.checked = index === selectedIndex
+    })
+    document.querySelector('.clipboard-delay-options').style.setProperty('--selected-index', String(selectedIndex))
 }
 
 function appliquerDelaiVerrouillage(event) {
@@ -1104,19 +1116,6 @@ async function previsualiserImport(csvText) {
     modal.classList.add('visible'); modal.setAttribute('aria-hidden', 'false')
 }
 
-async function verifierMotsDePasseCompromis() {
-    const unique = [...new Set(tousLesAcces().map(item => item.entry.mdp).filter(Boolean))]
-    let compromised = 0
-    for (const password of unique) {
-        const digest = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(password))
-        const hash = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase()
-        const response = await fetch(`https://api.pwnedpasswords.com/range/${hash.slice(0, 5)}`, { headers: { 'Add-Padding': 'true' } })
-        const suffix = hash.slice(5)
-        if ((await response.text()).split('\n').some(line => line.startsWith(`${suffix}:`))) compromised += 1
-    }
-    afficherToast(compromised ? `${compromised} mot(s) de passe compromis détecté(s).` : 'Aucun mot de passe compromis détecté.')
-}
-
 document.querySelector('.entry-panel .btn-ajouter').addEventListener('click', async function() {
     const plateforme = document.getElementById('plateforme').value.trim()
     const email = document.getElementById('email').value.trim()
@@ -1326,6 +1325,7 @@ document.getElementById('toggle-toolbar-lock').addEventListener('change', functi
 document.getElementById('auto-lock-delay').addEventListener('change', appliquerDelaiVerrouillage)
 document.getElementById('clipboard-clear-delay').addEventListener('change', function(event) {
     clipboardClearMs = Number(event.target.value)
+    synchroniserDelaiPressePapiers(clipboardClearMs)
     localStorage.setItem('clave-clipboard-clear-delay', String(clipboardClearMs))
     afficherToast('Délai du presse-papiers mis à jour.')
 })
@@ -1360,8 +1360,10 @@ document.getElementById('filter-favorites').addEventListener('click', function()
 document.getElementById('filter-recent').addEventListener('click', function() { accessFilter = accessFilter === 'recent' ? 'all' : 'recent'; document.getElementById('filter-recent').classList.toggle('active', accessFilter === 'recent'); document.getElementById('filter-favorites').classList.remove('active'); afficherCategorie(categorieActive) })
 document.getElementById('empty-new-access').addEventListener('click', function() { ouvrirPanneauAcces() })
 document.getElementById('empty-import').addEventListener('click', function() { document.getElementById('browser-import-file').click() })
-document.getElementById('check-breaches').addEventListener('click', function() { verifierMotsDePasseCompromis().catch(error => afficherToast(String(error))) })
 document.getElementById('command-search').addEventListener('input', afficherResultatsCommandes)
+document.getElementById('command-palette').addEventListener('click', function(event) {
+    if (event.target.id === 'command-palette') fermerPaletteCommandes()
+})
 document.getElementById('command-results').addEventListener('click', function(event) {
     const row = event.target.closest('.command-result'); if (!row) return
     const item = { category: row.dataset.category, index: Number(row.dataset.index), entry: categories[row.dataset.category][Number(row.dataset.index)] }
