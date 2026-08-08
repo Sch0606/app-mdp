@@ -16,6 +16,11 @@ test.beforeEach(async ({ page }) => {
     const invoke = async (command, args = {}) => {
       window.__calls.push({ command, args })
       if (command === 'auth_status') return { configured: true, unlocked: true }
+      if (command === 'plugin:updater|check') {
+        if (window.__updaterError) throw new Error(window.__updaterError)
+        return window.__updaterMetadata || null
+      }
+      if (command === 'plugin:updater|download_and_install') return undefined
       if (command === 'biometrie_status') return { isAvailable: false, isEnabled: false, biometryType: 'None', error: null }
       if (command === 'charger') return structuredClone(vault)
       if (command === 'charger_historique') return structuredClone(history)
@@ -62,6 +67,18 @@ test.beforeEach(async ({ page }) => {
       updater: { check: async () => null },
       process: { relaunch: async () => {} },
       app: { getVersion: async () => '0.3.0' },
+    }
+    window.__TAURI_INTERNALS__ = {
+      invoke: async (command, args = {}) => {
+        window.__calls.push({ command, args })
+        if (command === 'plugin:updater|check') {
+          if (window.__updaterError) throw new Error(window.__updaterError)
+          return window.__updaterMetadata || null
+        }
+        if (command === 'plugin:updater|download_and_install') return undefined
+        return invoke(command, args)
+      },
+      transformCallback: () => 1,
     }
   })
   await page.goto('/')
@@ -231,4 +248,36 @@ test('affiche un retour clair quand le fichier navigateur ne contient aucun mot 
 
   await expect(page.getByRole('dialog', { name: 'Accès détectés' })).toHaveCount(0)
   await expect(page.locator('#toast')).toContainText('Aucun mot de passe')
+})
+
+test('recherche une mise a jour via le plugin updater Tauri v2 sans global updater', async ({ page }) => {
+  await page.evaluate(() => {
+    delete window.__TAURI__.updater
+    window.__updaterMetadata = {
+      rid: 42,
+      version: '0.4.0',
+      currentVersion: '0.3.0',
+      date: '2026-08-09',
+      body: 'Nouvelle version disponible',
+    }
+  })
+  await page.locator('#settings-button').click()
+  await page.getByRole('button', { name: 'À propos' }).click()
+  await page.locator('#check-update').click()
+
+  await expect(page.locator('#update-status')).toContainText('Version 0.4.0 disponible')
+  await expect(page.locator('#install-update')).toBeVisible()
+  await expect.poll(() => page.evaluate(() => window.__calls.some((call) => call.command === 'plugin:updater|check'))).toBe(true)
+})
+
+test('affiche un message clair si le manifeste de mise a jour est absent', async ({ page }) => {
+  await page.evaluate(() => {
+    delete window.__TAURI__.updater
+    window.__updaterError = 'Could not fetch a valid release JSON from the remote'
+  })
+  await page.locator('#settings-button').click()
+  await page.getByRole('button', { name: 'À propos' }).click()
+  await page.locator('#check-update').click()
+
+  await expect(page.locator('#update-status')).toContainText('Aucune mise à jour publiée')
 })

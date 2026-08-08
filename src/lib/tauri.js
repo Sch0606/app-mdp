@@ -1,7 +1,15 @@
+import { check as checkUpdate } from '@tauri-apps/plugin-updater'
+
 function getTauri() {
   const api = window.__TAURI__
   if (!api?.core?.invoke) throw new Error('Clave doit être lancé depuis l’application de bureau.')
   return api
+}
+
+async function checkUpdater() {
+  const api = getTauri()
+  if (api.updater?.check) return api.updater.check()
+  return checkUpdate()
 }
 
 export const tauri = {
@@ -12,7 +20,9 @@ export const tauri = {
     return getTauri().clipboardManager
   },
   get updater() {
-    return getTauri().updater
+    return {
+      check: checkUpdater,
+    }
   },
   get process() {
     return getTauri().process

@@ -245,6 +245,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background: rgba(255,255,255,.055);
   border-color: rgba(255,255,255,.11);
 }
+.clave-app[data-theme="dark"] .import-warning {
+  color: #bfeadd !important;
+  background: rgba(32, 96, 76, .22);
+  box-shadow: inset 0 0 0 1px rgba(115, 224, 191, .16);
+}
+.clave-app[data-theme="dark"] .import-warning svg {
+  color: #73e0bf;
+}
 .clave-app[data-theme="dark"] .security-score-meter,
 .clave-app[data-theme="dark"] .strength-dot {
   background: rgba(255,255,255,.14);
