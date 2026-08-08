@@ -36,6 +36,8 @@ pub struct PasswordEntry {
     #[serde(default)]
     pub totp_secret: String,
     #[serde(default)]
+    pub icon_url: String,
+    #[serde(default)]
     pub favorite: bool,
     #[serde(default)]
     pub created_at: u64,
@@ -116,6 +118,8 @@ struct EncryptedEntry {
     notes: String,
     #[serde(default)]
     totp_secret: String,
+    #[serde(default)]
+    icon_url: String,
     #[serde(default)]
     favorite: bool,
     #[serde(default)]
@@ -732,6 +736,7 @@ impl PasswordStore {
             site: entry.site.clone(),
             notes: self.encrypt_text(&entry.notes)?,
             totp_secret: self.encrypt_text(&entry.totp_secret)?,
+            icon_url: entry.icon_url.clone(),
             favorite: entry.favorite,
             created_at: entry.created_at,
             updated_at: entry.updated_at,
@@ -755,6 +760,7 @@ impl PasswordStore {
             } else {
                 self.decrypt_text(&entry.totp_secret)?
             },
+            icon_url: entry.icon_url,
             favorite: entry.favorite,
             created_at: entry.created_at,
             updated_at: entry.updated_at,

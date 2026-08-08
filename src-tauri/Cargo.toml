@@ -24,6 +24,7 @@ sha1 = "0.10"
 hmac = "0.12"
 data-encoding = "2"
 csv = "1"
+url = "2"
 tauri = { version = "2", features = [] }
 tauri-plugin-biometry = "0.2"
 tauri-plugin-clipboard-manager = "2"
