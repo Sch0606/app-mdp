@@ -132,3 +132,13 @@ test('active le mode sombre depuis les parametres interface', async ({ page }) =
   await expect(page.locator('.settings-page')).toHaveCSS('background-color', 'rgb(10, 13, 12)')
   expect(await page.evaluate(() => localStorage.getItem('clave-dark-mode'))).toBe('true')
 })
+
+test('garde le texte du tutoriel import lisible en mode sombre', async ({ page }) => {
+  await page.locator('#settings-button').click()
+  await page.getByRole('button', { name: 'Interface' }).click()
+  await page.locator('#toggle-dark-mode').check()
+  await page.getByRole('button', { name: 'Sauvegarde' }).click()
+
+  await expect(page.locator('.import-warning')).toBeVisible()
+  await expect(page.locator('.import-warning')).toHaveCSS('color', 'rgb(191, 234, 221)')
+})

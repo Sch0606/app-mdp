@@ -20,6 +20,14 @@ import { allEntries, generateSecurePassword, normalizeSiteUrl } from './lib/secu
 const emptyBiometry = { isAvailable: false, isEnabled: false, biometryType: 'None', error: null }
 const SLEEP_GAP_THRESHOLD_MS = 5000
 
+function updateErrorMessage(cause) {
+  const message = errorMessage(cause, 'La recherche de mise à jour est indisponible pour le moment.')
+  if (/404|not found|latest\.json|manifest|valid release json|release json.*remote/i.test(message)) {
+    return 'Aucune mise à jour publiée pour le moment.'
+  }
+  return message
+}
+
 export function App() {
   const reduced = useReducedMotion()
   const toastTimer = useRef()
@@ -505,8 +513,11 @@ export function App() {
         default: break
       }
     } catch (cause) {
-      showToast(errorMessage(cause))
-      setUpdateStatus(errorMessage(cause))
+      const message = type === 'check-update' || type === 'install-update'
+        ? updateErrorMessage(cause)
+        : errorMessage(cause)
+      showToast(message)
+      setUpdateStatus(message)
     }
   }
 
