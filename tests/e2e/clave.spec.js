@@ -49,10 +49,65 @@ test('ajoute, modifie et supprime un accès avec le menu', async ({ page }) => {
 test('change de réglage et déplace les indicateurs animés', async ({ page }) => {
   await page.locator('#settings-button').click()
   await page.locator('input[name="auto-lock-delay"][value="600000"] + span').click()
-  await expect(page.locator('.delay-options')).toHaveAttribute('style', /--selected-index: 2/)
+  await expect(page.locator('.auto-lock-options')).toHaveAttribute('style', /--selected-index: 2/)
+  await page.locator('input[name="clipboard-clear-delay"][value="60000"] + span').click()
+  await expect(page.locator('.clipboard-delay-options')).toHaveAttribute('style', /--selected-index: 2/)
+  expect(await page.evaluate(() => localStorage.getItem('clave-clipboard-clear-delay'))).toBe('60000')
+  await page.locator('#close-settings').click()
+  await page.locator('#settings-button').click()
+  await expect(page.locator('input[name="clipboard-clear-delay"][value="60000"]')).toBeChecked()
   await page.getByRole('button', { name: 'Interface' }).click()
   await expect(page.locator('.settings-nav')).toHaveAttribute('style', /--selected-index: 1/)
   await page.locator('#close-settings').click()
   await page.getByRole('button', { name: 'Historique' }).click()
   await expect(page.locator('.vault-tabs')).toHaveAttribute('style', /--selected-index: 1/)
+})
+
+test('ferme la recherche Ctrl+K lors d un clic en dehors', async ({ page }) => {
+  await page.keyboard.press('Control+K')
+  const palette = page.locator('#command-palette')
+  await expect(palette).toHaveClass(/visible/)
+  await palette.click({ position: { x: 5, y: 5 } })
+  await expect(palette).not.toHaveClass(/visible/)
+})
+
+test('garde le bouton Créer dans la fenêtre après la création de catégories', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 520 })
+  const createButton = page.locator('#add-categorie')
+
+  for (let index = 0; index < 12; index += 1) {
+    await createButton.click()
+  }
+
+  await expect(createButton).toBeVisible()
+  const buttonBox = await createButton.boundingBox()
+  expect(buttonBox.y + buttonBox.height).toBeLessThanOrEqual(520)
+  expect(await page.evaluate(() => window.scrollY)).toBe(0)
+  await expect(page.locator('.categories')).toHaveCSS('overflow-y', 'auto')
+})
+
+test('ne crée pas de barre horizontale au survol d une catégorie', async ({ page }) => {
+  const categories = page.locator('.categories')
+  await page.locator('.categories li').first().hover()
+  const dimensions = await categories.evaluate(element => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }))
+  expect(dimensions.scrollWidth).toBe(dimensions.clientWidth)
+})
+
+test('applique une interface plus aérée avec Geist et des boutons arrondis', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+
+  await expect(page.locator('body')).toHaveCSS('font-family', /Geist/)
+  await expect(page.locator('#new-access')).toHaveCSS('border-radius', '40px')
+  await expect(page.locator('#lock-now')).toHaveCSS('border-radius', '40px')
+
+  const mainPaddingTop = await page.locator('.main').evaluate(element => Number.parseFloat(getComputedStyle(element).paddingTop))
+  const toolbarGap = await page.locator('.toolbar').evaluate(element => Number.parseFloat(getComputedStyle(element).gap))
+  const listGap = await page.locator('#liste-mdp').evaluate(element => Number.parseFloat(getComputedStyle(element).gap))
+
+  expect(mainPaddingTop).toBeGreaterThanOrEqual(48)
+  expect(toolbarGap).toBeGreaterThanOrEqual(16)
+  expect(listGap).toBeGreaterThanOrEqual(14)
 })

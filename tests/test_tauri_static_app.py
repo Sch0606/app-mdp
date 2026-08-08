@@ -174,9 +174,11 @@ class TauriStaticAppTest(unittest.TestCase):
             "Controle la securite, l'interface et les sauvegardes du coffre.",
             html,
         )
-        self.assertIn('class="delay-options"', html)
+        self.assertIn('class="delay-options auto-lock-options"', html)
+        self.assertIn('class="delay-options clipboard-delay-options"', html)
         self.assertIn('class="delay-selection"', html)
         self.assertEqual(html.count('name="auto-lock-delay"'), 4)
+        self.assertEqual(html.count('name="clipboard-clear-delay"'), 4)
         self.assertIn('class="settings-switch"', html)
         self.assertIn('id="entry-menu"', html)
         self.assertIn('id="entry-menu-copy"', html)
@@ -238,6 +240,20 @@ class TauriStaticAppTest(unittest.TestCase):
         self.assertNotIn("Sauvegarder", html + script)
         self.assertNotIn("Sauver", html + script)
 
+    def test_interface_uses_geist_spacing_and_rounded_controls(self):
+        html = Path("src/index.html").read_text(encoding="utf-8")
+        style = Path("src/style.css").read_text(encoding="utf-8")
+
+        self.assertIn("@font-face", style)
+        self.assertIn("font-family: 'Geist'", style)
+        self.assertIn("--radius-action: 40px", style)
+        self.assertIn("--content-max: 1120px", style)
+        self.assertIn("--section-gap: 24px", style)
+        self.assertIn("font-family: var(--font-ui)", style)
+        self.assertIn("border-radius: var(--radius-action)", style)
+        self.assertIn("settings-panel[data-settings-panel=\"security\"]", style)
+        self.assertNotIn("fonts.googleapis.com", html)
+
     def test_hardening_and_productivity_completion_is_wired(self):
         html = Path("src/index.html").read_text(encoding="utf-8")
         script = Path("src/script.js").read_text(encoding="utf-8")
@@ -248,12 +264,15 @@ class TauriStaticAppTest(unittest.TestCase):
 
         self.assertNotIn("fonts.googleapis.com", html)
         self.assertNotIn('"csp": null', config)
-        for marker in ('id="command-palette"', 'id="import-preview-modal"', 'id="empty-vault"', 'id="filter-favorites"', 'id="filter-recent"', 'id="check-breaches"'):
+        for marker in ('id="command-palette"', 'id="import-preview-modal"', 'id="empty-vault"', 'id="filter-favorites"', 'id="filter-recent"'):
             self.assertIn(marker, html)
         for marker in ("restaurer_historique", "supprimer_corbeille", "PURGE_AFTER_SECONDS", "favorite", "updated_at", "last_accessed"):
             self.assertIn(marker, rust + store)
-        for marker in ("ouvrirPaletteCommandes", "previsualiserImport", "verifierMotsDePasseCompromis"):
+        for marker in ("ouvrirPaletteCommandes", "previsualiserImport"):
             self.assertIn(marker, script)
+        self.assertNotIn('id="check-breaches"', html)
+        self.assertNotIn("verifierMotsDePasseCompromis", script)
+        self.assertNotIn("api.pwnedpasswords.com", script + config)
         self.assertIn('"test:e2e"', package)
         self.assertTrue(Path("tests/e2e/clave.spec.js").exists())
 

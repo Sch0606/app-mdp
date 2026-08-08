@@ -144,7 +144,6 @@
                 <span id="audit-score">0 alerte</span>
             </div>
             <ul id="audit-list"></ul>
-            <button class="btn-secondary" id="check-breaches" type="button">Vérifier les mots de passe compromis</button>
         </article>
     </section>
 
@@ -201,10 +200,13 @@
                     <button class="btn-ajouter" id="settings-lock-now" type="button">Verrouiller maintenant</button>
                     <fieldset class="settings-field delay-setting" id="auto-lock-delay">
                         <legend>Délai avant verrouillage</legend>
-                        <div class="delay-options"><span class="delay-selection" aria-hidden="true"></span><label><input type="radio" name="auto-lock-delay" value="120000"><span>2 min</span></label><label><input type="radio" name="auto-lock-delay" value="300000"><span>5 min</span></label><label><input type="radio" name="auto-lock-delay" value="600000"><span>10 min</span></label><label><input type="radio" name="auto-lock-delay" value="0"><span>Jamais</span></label></div>
+                        <div class="delay-options auto-lock-options"><span class="delay-selection" aria-hidden="true"></span><label><input type="radio" name="auto-lock-delay" value="120000"><span>2 min</span></label><label><input type="radio" name="auto-lock-delay" value="300000"><span>5 min</span></label><label><input type="radio" name="auto-lock-delay" value="600000"><span>10 min</span></label><label><input type="radio" name="auto-lock-delay" value="0"><span>Jamais</span></label></div>
                     </fieldset>
                     <div class="settings-field" id="biometry-settings"><span>Authentification biométrique</span><p class="settings-feedback" id="biometry-status">Vérification...</p><input type="password" id="biometry-master-password" placeholder="Mot de passe maître" autocomplete="current-password"><div class="settings-actions"><button class="btn-secondary" id="enable-biometry" type="button">Activer</button><button class="mini-action" id="disable-biometry" type="button">Désactiver</button></div></div>
-                    <label class="settings-field"><span>Effacement du presse-papiers</span><select id="clipboard-clear-delay"><option value="15000">Après 15 secondes</option><option value="30000" selected>Après 30 secondes</option><option value="60000">Après 1 minute</option><option value="0">Jamais</option></select></label>
+                    <fieldset class="settings-field delay-setting">
+                        <legend>Effacement du presse-papiers</legend>
+                        <div class="delay-options clipboard-delay-options" id="clipboard-clear-delay"><span class="delay-selection" aria-hidden="true"></span><label><input type="radio" name="clipboard-clear-delay" value="15000"><span>15 s</span></label><label><input type="radio" name="clipboard-clear-delay" value="30000"><span>30 s</span></label><label><input type="radio" name="clipboard-clear-delay" value="60000"><span>1 min</span></label><label><input type="radio" name="clipboard-clear-delay" value="0"><span>Jamais</span></label></div>
+                    </fieldset>
                 </article>
                 <form class="settings-card" id="change-master-form">
                     <div><p class="section-label">Mot de passe maître</p><h4>Modifier l’accès au coffre</h4></div>
