@@ -1,6 +1,6 @@
 [package]
 name = "clave"
-version = "0.3.0"
+version = "0.3.1"
 description = "Coffre local de mots de passe"
 authors = ["Clave"]
 edition = "2021"
@@ -24,6 +24,7 @@ sha1 = "0.10"
 hmac = "0.12"
 data-encoding = "2"
 csv = "1"
+url = "2"
 tauri = { version = "2", features = [] }
 tauri-plugin-biometry = "0.2"
 tauri-plugin-clipboard-manager = "2"

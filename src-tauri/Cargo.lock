@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "clave"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -425,6 +425,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "thiserror 2.0.18",
+ "url",
 ]
 
 [[package]]

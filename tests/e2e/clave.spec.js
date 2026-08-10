@@ -7,7 +7,7 @@ test.beforeEach(async ({ page }) => {
       if (command === 'auth_status') return { configured: true, unlocked: true }
       if (command === 'charger') return structuredClone(vault)
       if (command === 'biometrie_status') return { isAvailable: false, isEnabled: false, biometryType: 'None' }
-      if (command === 'ajouter') { vault[args.categorie].push({ plateforme: args.plateforme, email: args.email, mdp: args.mdp, site: args.site, notes: args.notes, totp_secret: args.totpSecret, updated_at: Math.floor(Date.now() / 1000) }); return }
+      if (command === 'ajouter') { vault[args.categorie].push({ plateforme: args.plateforme, email: args.email, mdp: args.mdp, site: args.site, notes: args.notes, totp_secret: args.totpSecret, icon_url: args.iconUrl, updated_at: Math.floor(Date.now() / 1000) }); return }
       if (command === 'modifier') { vault[args.categorie][args.index] = { ...vault[args.categorie][args.index], plateforme: args.plateforme, email: args.email, mdp: args.mdp }; return }
       if (command === 'supprimer_acces') { vault[args.categorie].splice(args.index, 1); return structuredClone(vault) }
       if (command === 'charger_historique' || command === 'charger_corbeille') return []
@@ -24,8 +24,13 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator('#launch-screen')).toHaveCount(0, { timeout: 5000 })
 })
 
+test('monte l application React', async ({ page }) => {
+  await expect(page.getByTestId('clave-app')).toBeVisible()
+})
+
 test('ajoute, modifie et supprime un accès avec le menu', async ({ page }) => {
-  await page.getByRole('button', { name: '+ Nouvel accès' }).click()
+  await expect(page.getByRole('button', { name: 'Nouvel accès' })).toBeVisible()
+  await page.getByRole('button', { name: 'Nouvel accès' }).click()
   await page.locator('#plateforme').fill('Google')
   await page.locator('#email').fill('nom@gmail.com')
   await page.locator('#mdp').fill('Secret-123!')
@@ -48,10 +53,15 @@ test('ajoute, modifie et supprime un accès avec le menu', async ({ page }) => {
 
 test('change de réglage et déplace les indicateurs animés', async ({ page }) => {
   await page.locator('#settings-button').click()
+  await expect(page.locator('input[name="auto-lock-delay"]')).toHaveCount(4)
   await page.locator('input[name="auto-lock-delay"][value="600000"] + span').click()
   await expect(page.locator('.auto-lock-options')).toHaveAttribute('style', /--selected-index: 2/)
+  await expect(page.locator('.auto-lock-options .delay-selection')).toBeVisible()
+  await expect(page.locator('.auto-lock-options .delay-selection')).not.toHaveCSS('transition-duration', '0s')
   await page.locator('input[name="clipboard-clear-delay"][value="60000"] + span').click()
   await expect(page.locator('.clipboard-delay-options')).toHaveAttribute('style', /--selected-index: 2/)
+  await expect(page.locator('.clipboard-delay-options .delay-selection')).toBeVisible()
+  await expect(page.locator('.clipboard-delay-options .delay-selection')).not.toHaveCSS('transition-duration', '0s')
   expect(await page.evaluate(() => localStorage.getItem('clave-clipboard-clear-delay'))).toBe('60000')
   await page.locator('#close-settings').click()
   await page.locator('#settings-button').click()
@@ -59,7 +69,7 @@ test('change de réglage et déplace les indicateurs animés', async ({ page }) 
   await page.getByRole('button', { name: 'Interface' }).click()
   await expect(page.locator('.settings-nav')).toHaveAttribute('style', /--selected-index: 1/)
   await page.locator('#close-settings').click()
-  await page.getByRole('button', { name: 'Historique' }).click()
+  await page.getByRole('tab', { name: 'Historique' }).click()
   await expect(page.locator('.vault-tabs')).toHaveAttribute('style', /--selected-index: 1/)
 })
 
@@ -82,6 +92,7 @@ test('garde le bouton Créer dans la fenêtre après la création de catégories
   await expect(createButton).toBeVisible()
   const buttonBox = await createButton.boundingBox()
   expect(buttonBox.y + buttonBox.height).toBeLessThanOrEqual(520)
+  expect(buttonBox.height).toBeLessThanOrEqual(48)
   expect(await page.evaluate(() => window.scrollY)).toBe(0)
   await expect(page.locator('.categories')).toHaveCSS('overflow-y', 'auto')
 })
@@ -110,4 +121,24 @@ test('applique une interface plus aérée avec Geist et des boutons arrondis', a
   expect(mainPaddingTop).toBeGreaterThanOrEqual(48)
   expect(toolbarGap).toBeGreaterThanOrEqual(16)
   expect(listGap).toBeGreaterThanOrEqual(14)
+})
+
+test('active le mode sombre depuis les parametres interface', async ({ page }) => {
+  await page.locator('#settings-button').click()
+  await page.getByRole('button', { name: 'Interface' }).click()
+  await page.locator('#toggle-dark-mode').check()
+
+  await expect(page.locator('[data-testid="clave-app"]')).toHaveAttribute('data-theme', 'dark')
+  await expect(page.locator('.settings-page')).toHaveCSS('background-color', 'rgb(10, 13, 12)')
+  expect(await page.evaluate(() => localStorage.getItem('clave-dark-mode'))).toBe('true')
+})
+
+test('garde le texte du tutoriel import lisible en mode sombre', async ({ page }) => {
+  await page.locator('#settings-button').click()
+  await page.getByRole('button', { name: 'Interface' }).click()
+  await page.locator('#toggle-dark-mode').check()
+  await page.getByRole('button', { name: 'Sauvegarde' }).click()
+
+  await expect(page.locator('.import-warning')).toBeVisible()
+  await expect(page.locator('.import-warning')).toHaveCSS('color', 'rgb(191, 234, 221)')
 })
