@@ -52,4 +52,3 @@ jobs:
           args: ${{ matrix.args }}
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
-          uploadUpdaterSignatures: true
