@@ -1,6 +1,6 @@
 [package]
 name = "clave"
-version = "0.3.0"
+version = "0.3.1"
 description = "Coffre local de mots de passe"
 authors = ["Clave"]
 edition = "2021"
