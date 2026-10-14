@@ -1,15 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  auditEntries,
   filterEntries,
   generateSecurePassword,
   normalizeSiteUrl,
   normalizeText,
   normalizeTotpSecret,
-  passwordStrength,
   siteIconFallback,
 } from '../../src/lib/security.js'
+import { auditEntries, passwordStrength } from '../../src/lib/passwordStrength.js'
 
 function deterministicCrypto(values) {
   let offset = 0

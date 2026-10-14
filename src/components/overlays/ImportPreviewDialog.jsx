@@ -15,7 +15,7 @@ export function ImportPreviewDialog({ entries, onClose, onConfirm }) {
       open={entries.length > 0}
       title="Accès détectés"
       labelledBy="import-preview-title"
-      description="Sélectionnez les accès à importer, puis supprimez le fichier CSV en clair."
+      description="Sélectionnez les accès à importer, puis supprimez le fichier exporté : il est en clair."
       onClose={onClose}
       actions={<><button className="secondary-button" id="cancel-import-preview" type="button" onClick={onClose}>Annuler</button><button className="primary-button" id="confirm-import-preview" type="button" disabled={!selected.length} onClick={() => onConfirm(selected.map((index) => entries[index]))}>Importer {selected.length} accès</button></>}
     >
@@ -24,6 +24,7 @@ export function ImportPreviewDialog({ entries, onClose, onConfirm }) {
           <label className="import-preview-row" key={`${entry.plateforme}-${entry.email}-${index}`}>
             <input type="checkbox" checked={selected.includes(index)} onChange={() => toggle(index)} />
             <span><strong>{entry.plateforme || 'Accès sans nom'}</strong><small>{[entry.email || 'Sans identifiant', entry.site].filter(Boolean).join(' · ')}</small></span>
+            {entry.categorie && <em className="import-preview-category">{entry.categorie}</em>}
           </label>
         ))}
       </div>

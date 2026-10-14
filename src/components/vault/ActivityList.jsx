@@ -1,8 +1,10 @@
 import { History, RotateCcw, Trash2, XCircle } from 'lucide-react'
 
+const dateFormatter = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'medium', timeStyle: 'short' })
+
 function formatDate(timestamp) {
   if (!timestamp) return 'Date inconnue'
-  return new Intl.DateTimeFormat('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(timestamp * 1000))
+  return dateFormatter.format(new Date(timestamp * 1000))
 }
 
 export function ActivityList({ mode, items, onAction }) {

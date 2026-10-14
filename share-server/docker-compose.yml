@@ -1,0 +1,25 @@
+# Serveur de partage + Caddy (HTTPS automatique). Renseignez DOMAIN dans un fichier .env.
+services:
+  share-server:
+    build: .
+    restart: unless-stopped
+    # Pas de port publié : seul Caddy y accède.
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - share-server
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?Indiquez DOMAIN=partage.mondomaine.fr dans le fichier .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

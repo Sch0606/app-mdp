@@ -20,9 +20,9 @@ export const microSpring = {
 }
 
 export const fadeSlide = {
-  initial: { opacity: 0, y: 8, filter: 'blur(4px)' },
-  animate: { opacity: 1, y: 0, filter: 'blur(0px)' },
-  exit: { opacity: 0, y: -4, filter: 'blur(2px)' },
+  initial: { opacity: 0, y: 8 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -4 },
 }
 
 export function motionProps(reduced, variants = fadeSlide) {

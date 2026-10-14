@@ -1,8 +1,9 @@
 import { motion } from 'framer-motion'
 import { FolderKey, LockKeyhole, Plus, Settings } from 'lucide-react'
+import { memo } from 'react'
 import { spring } from '../../motion/presets.js'
 
-export function Sidebar({ categories, activeCategory, onSelect, onCategoryMenu, onAdd, onSettings, onLock }) {
+export const Sidebar = memo(function Sidebar({ categories, activeCategory, onSelect, onCategoryMenu, onAdd, onSettings, onLock }) {
   return (
     <aside className="sidebar">
       <nav className="categories" aria-label="Espaces">
@@ -41,4 +42,4 @@ export function Sidebar({ categories, activeCategory, onSelect, onCategoryMenu, 
       </div>
     </aside>
   )
-}
+})

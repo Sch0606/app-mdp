@@ -11,7 +11,25 @@ test.beforeEach(async ({ page }) => {
       { categorie: 'Perso', action: 'modified', entry: { ...vault.Perso[0], plateforme: 'Google recent' }, timestamp: 1_990_000, entry_index: 0 },
     ]
     const trash = [{ categorie: 'Perso', entry: { ...vault.Perso[0], plateforme: 'Compte supprimé' }, timestamp: 1_950_000 }]
+    let autofill = { enabled: false, running: true, port: 32191, token: 'pairing-token-initial' }
+    const eventListeners = new Map()
     window.__calls = []
+    window.open = (url) => { window.__opened = url }
+    window.__saveExternalCredential = () => {
+      vault.Perso.push({
+        plateforme: 'Epic Games',
+        email: 'joueur@example.fr',
+        mdp: 'Secret-Epic-123!',
+        site: 'https://www.epicgames.com',
+        notes: '',
+        totp_secret: '',
+        favorite: false,
+        updated_at: 2_100_000,
+      })
+      for (const listener of eventListeners.get('vault-changed') || []) {
+        listener({ event: 'vault-changed', payload: { action: 'save' } })
+      }
+    }
 
     const invoke = async (command, args = {}) => {
       window.__calls.push({ command, args })
@@ -23,8 +41,23 @@ test.beforeEach(async ({ page }) => {
       if (command === 'plugin:updater|download_and_install') return undefined
       if (command === 'biometrie_status') return { isAvailable: false, isEnabled: false, biometryType: 'None', error: null }
       if (command === 'charger') return structuredClone(vault)
-      if (command === 'charger_historique') return structuredClone(history)
-      if (command === 'charger_corbeille') return structuredClone(trash)
+      if (command === 'autofill_status') return structuredClone(autofill)
+      if (command === 'set_autofill_enabled') {
+        autofill = { ...autofill, enabled: args.enabled }
+        return structuredClone(autofill)
+      }
+      if (command === 'rotate_autofill_token') {
+        autofill = { ...autofill, token: 'pairing-token-rotated' }
+        return structuredClone(autofill)
+      }
+      if (command === 'charger_historique') {
+        if (window.__historyDelay) await new Promise((resolve) => setTimeout(resolve, window.__historyDelay))
+        return structuredClone(history)
+      }
+      if (command === 'charger_corbeille') {
+        if (window.__trashDelay) await new Promise((resolve) => setTimeout(resolve, window.__trashDelay))
+        return structuredClone(trash)
+      }
       if (command === 'ajouter' && args.plateforme === 'Operation lente') {
         await new Promise((resolve) => setTimeout(resolve, 350))
         return undefined
@@ -35,7 +68,10 @@ test.beforeEach(async ({ page }) => {
       }
       if (command === 'restaurer_historique' || command === 'restaurer_corbeille') return structuredClone(vault)
       if (command === 'generer_totp') return { code: '123456', remaining: 22 }
-      if (command === 'resoudre_icone_site') return { iconUrl: 'https://google.com/favicon.ico', source: 'favicon', fallbackLabel: 'GO' }
+      if (command === 'resoudre_icone_site') {
+        if (args.site?.includes('aternos.org')) return { iconUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=', source: 'favicon', fallbackLabel: 'AT' }
+        return { iconUrl: 'https://google.com/favicon.ico', source: 'favicon', fallbackLabel: 'GO' }
+      }
       if (command === 'renommer_categorie') {
         vault[args.nouveauNom] = vault[args.ancienNom]
         delete vault[args.ancienNom]
@@ -67,6 +103,14 @@ test.beforeEach(async ({ page }) => {
       updater: { check: async () => null },
       process: { relaunch: async () => {} },
       app: { getVersion: async () => '0.3.0' },
+      event: {
+        listen: async (eventName, handler) => {
+          const listeners = eventListeners.get(eventName) || []
+          listeners.push(handler)
+          eventListeners.set(eventName, listeners)
+          return () => eventListeners.set(eventName, listeners.filter((listener) => listener !== handler))
+        },
+      },
     }
     window.__TAURI_INTERNALS__ = {
       invoke: async (command, args = {}) => {
@@ -101,6 +145,79 @@ test('charge et restaure l historique et la poubelle', async ({ page }) => {
   expect(restoreCall.args.index).toBe(1)
 })
 
+test('actualise le coffre après un enregistrement depuis le navigateur', async ({ page }) => {
+  await page.evaluate(() => window.__saveExternalCredential())
+
+  await expect(page.getByText('Epic Games', { exact: true })).toBeVisible()
+  await expect(page.getByText('Accès enregistré depuis le navigateur.')).toBeVisible()
+})
+
+test('active et appaire uniquement l extension navigateur', async ({ page }) => {
+  await page.locator('#settings-button').click()
+  await page.getByRole('button', { name: 'Remplissage' }).click()
+
+  await expect(page.getByText('Extension navigateur prête')).toBeVisible()
+  await expect(page.getByText('L’extension Chrome et Edge peut proposer les comptes enregistrés dans les pages de connexion.')).toBeVisible()
+  await page.locator('#toggle-autofill').check()
+  await page.locator('#copy-autofill-token').click()
+  await expect.poll(() => page.evaluate(() => window.__copied)).toBe('pairing-token-initial')
+  await page.locator('#rotate-autofill-token').click()
+
+  const calls = await page.evaluate(() => window.__calls.filter((call) => call.command.startsWith('autofill') || call.command.includes('autofill')))
+  expect(calls.map((call) => call.command)).toEqual(expect.arrayContaining([
+    'autofill_status',
+    'set_autofill_enabled',
+    'rotate_autofill_token',
+  ]))
+})
+
+test('garde chaque activite dans le bon onglet pendant une navigation rapide', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__historyDelay = 300
+    window.__trashDelay = 20
+  })
+
+  await page.getByRole('tab', { name: 'Historique' }).click()
+  await page.getByRole('tab', { name: 'Poubelle' }).click()
+
+  await expect(page.locator('.activity-row')).toContainText('Compte supprimé')
+  await page.waitForTimeout(350)
+  await expect(page.getByRole('tab', { name: 'Poubelle' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.locator('.activity-row')).toContainText('Compte supprimé')
+  await expect(page.locator('.activity-row')).not.toContainText('Google ancien')
+})
+
+test('anime l indicateur sans rester bloque entre deux onglets', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Poubelle' }).click()
+  await page.waitForTimeout(30)
+
+  const animationStarted = await page.evaluate(() => {
+    const accessTab = document.querySelectorAll('.vault-tab')[0]
+    const trashTab = document.querySelectorAll('.vault-tab')[3]
+    const indicator = document.querySelector('.vault-tab-selection')
+    if (!accessTab || !trashTab || !indicator) return false
+    const accessRect = accessTab.getBoundingClientRect()
+    const trashRect = trashTab.getBoundingClientRect()
+    const indicatorRect = indicator.getBoundingClientRect()
+    return indicatorRect.left > accessRect.left + 1 && indicatorRect.left < trashRect.left - 1
+  })
+  expect(animationStarted).toBe(true)
+
+  await page.getByRole('tab', { name: 'Historique' }).click()
+  await page.waitForTimeout(20)
+  await page.getByRole('tab', { name: 'Accès' }).click()
+  await page.waitForTimeout(220)
+
+  const indicatorIsAligned = await page.evaluate(() => {
+    const activeRect = document.querySelector('.vault-tab.active')?.getBoundingClientRect()
+    const indicatorRect = document.querySelector('.vault-tab-selection')?.getBoundingClientRect()
+    return Boolean(activeRect && indicatorRect
+      && Math.abs(activeRect.left - indicatorRect.left) < 1
+      && Math.abs(activeRect.width - indicatorRect.width) < 1)
+  })
+  expect(indicatorIsAligned).toBe(true)
+})
+
 test('la palette restaure le focus au champ de recherche', async ({ page }) => {
   const search = page.locator('#search-input')
   await search.focus()
@@ -108,6 +225,29 @@ test('la palette restaure le focus au champ de recherche', async ({ page }) => {
   await expect(page.locator('#command-search')).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(search).toBeFocused()
+})
+
+test('la recherche tolere les fautes et copie directement le mot de passe', async ({ page }) => {
+  await page.keyboard.press('Control+K')
+  await page.locator('#command-search').fill('Gogle')
+  await page.getByRole('button', { name: 'Mot de passe Google' }).click()
+
+  await expect.poll(() => page.evaluate(() => window.__copied)).toBe('Secret-123!')
+  await expect(page.locator('#command-palette')).not.toHaveClass(/visible/)
+})
+
+test('affiche une vraie sante du coffre avec conseils actionnables', async ({ page }) => {
+  await page.locator('#new-access').click()
+  await page.locator('#plateforme').fill('Ancien sans 2FA')
+  await page.locator('#mdp').fill('abc')
+  await page.locator('.btn-ajouter').click()
+
+  await page.getByRole('tab', { name: 'Santé' }).click()
+  await expect(page.getByRole('heading', { name: 'Mots de passe faibles' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Entrées sans 2FA' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Entrées sans site web' })).toBeVisible()
+  await page.getByRole('button', { name: /Ancien sans 2FA/ }).first().click()
+  await expect(page.locator('.entry-drawer')).toBeVisible()
 })
 
 test('le verrouillage ferme les surfaces sensibles et ignore une sauvegarde tardive', async ({ page }) => {
@@ -171,13 +311,14 @@ test('configure la longueur et les caracteres du generateur', async ({ page }) =
 
 test('resout le favicon du site sans bloquer le formulaire', async ({ page }) => {
   await page.locator('#new-access').click()
-  await page.locator('#plateforme').fill('Google')
+  await page.locator('#plateforme').fill('Aternos')
   await page.locator('#mdp').fill('Secret-123!')
-  await page.locator('#entry-site').fill('google')
-  await expect(page.locator('.site-icon-preview img')).toHaveAttribute('src', 'https://google.com/favicon.ico')
+  await page.locator('#entry-site').fill('https://aternos.org')
+  await expect(page.locator('.site-icon-preview img')).toHaveAttribute('src', /data:image\/png;base64/)
   await page.locator('.btn-ajouter').click()
-  await expect.poll(() => page.evaluate(() => window.__calls.findLast((call) => call.command === 'ajouter')?.args.site)).toBe('https://google.com')
-  await expect(page.locator('.entry-row img.entry-avatar-image')).toHaveAttribute('src', 'https://google.com/favicon.ico')
+  await expect.poll(() => page.evaluate(() => window.__calls.findLast((call) => call.command === 'ajouter')?.args.site)).toBe('https://aternos.org')
+  const aternosRow = page.getByRole('article').filter({ hasText: 'Aternos' })
+  await expect(aternosRow.locator('img.entry-avatar-image')).toHaveAttribute('src', /data:image\/png;base64/)
 })
 
 test('affiche des libelles utilisateur et l aide import', async ({ page }) => {
@@ -190,7 +331,7 @@ test('affiche des libelles utilisateur et l aide import', async ({ page }) => {
   await expect(page.getByText('Exporter le coffre')).toBeVisible()
   await expect(page.getByText('Importer une sauvegarde Clave')).toBeVisible()
   await expect(page.getByText(/Vérifiez la prévisualisation/)).toBeVisible()
-  await expect(page.getByText(/Supprimez le fichier CSV après import/)).toBeVisible()
+  await expect(page.getByText(/Supprimez le fichier après import/)).toBeVisible()
   await expect(page.getByRole('link', { name: /Chrome/ })).toHaveAttribute('href', /support\.google\.com/)
   await expect(page.getByRole('link', { name: /Bitwarden/ })).toHaveAttribute('href', /bitwarden\.com/)
 })
@@ -210,6 +351,57 @@ test('ferme une boîte de dialogue avec Echap', async ({ page }) => {
   await expect(page.getByRole('dialog', { name: 'Renommer l’espace' })).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog', { name: 'Renommer l’espace' })).toHaveCount(0)
+})
+
+test('ouvre les boîtes de dialogue dans la couche native et restaure le focus', async ({ page }) => {
+  await page.locator('#settings-button').click()
+  await page.getByRole('button', { name: 'Sauvegarde' }).click()
+  const trigger = page.locator('#settings-export-vault')
+  await trigger.focus()
+  await trigger.click()
+
+  const dialog = page.getByRole('dialog', { name: 'Exporter le coffre' })
+  await expect(dialog).toBeVisible()
+  await expect(page.locator('#backup-password')).toBeFocused()
+  await expect(dialog).toHaveJSProperty('open', true)
+  expect(await dialog.evaluate((element) => element.parentElement === document.body)).toBe(true)
+
+  await page.locator('#cancel-backup').click()
+  await expect(dialog).toHaveCount(0)
+  await expect(trigger).toBeFocused()
+})
+
+test('navigue dans un menu contextuel au clavier et rend le focus au contexte', async ({ page }) => {
+  const category = page.locator('.categories li button').first()
+  await category.focus()
+  await category.click({ button: 'right' })
+
+  const rename = page.locator('#menu-rename')
+  const remove = page.locator('#menu-delete')
+  await expect(rename).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(remove).toBeFocused()
+  await page.keyboard.press('Home')
+  await expect(rename).toBeFocused()
+  await page.keyboard.press('End')
+  await expect(remove).toBeFocused()
+  await page.keyboard.press('Escape')
+
+  await expect(page.locator('#category-menu')).toHaveCount(0)
+  await expect(category).toBeFocused()
+})
+
+test('conserve une région live même sans notification visible', async ({ page }) => {
+  const region = page.locator('#toast')
+  await expect(region).toHaveCount(1)
+  await expect(region).toHaveAttribute('role', 'status')
+  await expect(region).toBeEmpty()
+
+  await page.locator('#new-access').click()
+  await page.locator('#plateforme').fill('Notification')
+  await page.locator('#mdp').fill('Secret-Notification-123!')
+  await page.locator('.btn-ajouter').click()
+  await expect(region).toContainText('Accès ajouté.')
 })
 
 test('exporte une sauvegarde depuis les paramètres', async ({ page }) => {

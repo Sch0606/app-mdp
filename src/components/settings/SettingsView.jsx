@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { ArrowLeft, BookOpen, CloudDownload, Download, Fingerprint, FileText, Globe2, Info, Keyboard, LockKeyhole, MonitorCog, Shield, Upload } from 'lucide-react'
+import { ArrowLeft, BookOpen, CloudDownload, Copy, Download, Fingerprint, FileText, Globe2, Info, Keyboard, LifeBuoy, Link2, LockKeyhole, MonitorCog, RefreshCw, Shield, Sparkles, Upload } from 'lucide-react'
 import { useState } from 'react'
 import { motionProps, spring } from '../../motion/presets.js'
 import { DelaySelector } from './DelaySelector.jsx'
@@ -7,7 +7,9 @@ import { DelaySelector } from './DelaySelector.jsx'
 const sections = [
   ['security', 'Sécurité', Shield],
   ['interface', 'Interface', MonitorCog],
+  ['autofill', 'Remplissage', Sparkles],
   ['backup', 'Sauvegarde', CloudDownload],
+  ['sharing', 'Partage', Link2],
   ['shortcuts', 'Raccourcis', Keyboard],
   ['about', 'À propos', Info],
 ]
@@ -39,24 +41,33 @@ const importTypes = [
   },
   {
     icon: Globe2,
-    title: 'Importer depuis un navigateur',
-    text: 'Lit un fichier CSV/TSV exporté depuis Chrome, Edge, Firefox, Safari ou un gestionnaire compatible.',
+    title: 'Importer depuis un navigateur ou un gestionnaire',
+    text: 'Lit un export CSV de Chrome, Edge, Firefox, Safari, 1Password ou LastPass, un JSON Bitwarden ou un XML KeePass. Les dossiers deviennent des espaces.',
   },
 ]
 
 const browserImportSteps = [
   'Ouvrez le gestionnaire de mots de passe de votre navigateur.',
   'Exportez les mots de passe au format CSV quand cette option est proposée.',
-  'Dans Clave, cliquez sur Depuis un navigateur et sélectionnez le fichier exporté.',
+  'Dans Clave, cliquez sur Depuis un navigateur ou un gestionnaire et sélectionnez le fichier exporté.',
   'Vérifiez la prévisualisation, décochez ce que vous ne voulez pas importer, puis validez.',
-  'Supprimez le fichier CSV après import : il contient vos mots de passe en clair.',
+  'Supprimez le fichier après import : il contient vos mots de passe en clair.',
 ]
 
-export function SettingsView({ preferences, biometry, version, updateStatus, updateAvailable, onClose, onPreference, onAction }) {
+const managerFormats = [
+  ['Bitwarden', 'Outils › Exporter › format .json (non chiffré) ou .csv'],
+  ['KeePass / KeePassXC', 'Fichier › Exporter › KeePass XML (2.x)'],
+  ['1Password', 'Fichier › Exporter › format CSV'],
+  ['LastPass', 'Options avancées › Exporter › fichier CSV'],
+]
+
+export function SettingsView({ initialSection = 'security', preferences, biometry, autofill, systemLock, screenProtection, recoveryConfigured, version, updateStatus, updateAvailable, onClose, onPreference, onAction }) {
   const reduced = useReducedMotion()
-  const [section, setSection] = useState('security')
+  const [section, setSection] = useState(initialSection)
   const [biometricPassword, setBiometricPassword] = useState('')
   const [passwords, setPasswords] = useState({ old: '', next: '', confirm: '' })
+  const [recoveryPassword, setRecoveryPassword] = useState('')
+  const [shareServer, setShareServer] = useState(preferences.shareServer)
   const selectedIndex = sections.findIndex(([value]) => value === section)
   const authMethod = /windows|hello/i.test(biometry.biometryType || '') ? 'Windows Hello' : 'Déverrouillage natif'
 
@@ -68,6 +79,25 @@ export function SettingsView({ preferences, biometry, version, updateStatus, upd
     }
     await onAction('change-password', passwords)
     setPasswords({ old: '', next: '', confirm: '' })
+  }
+
+  async function submitRecoveryKit(event) {
+    event.preventDefault()
+    if (recoveryPassword.length < 8) return
+    const created = await onAction('create-recovery-kit', recoveryPassword)
+    if (created) setRecoveryPassword('')
+  }
+
+  function submitShareServer(event) {
+    event.preventDefault()
+    const value = shareServer.trim().replace(/\/+$/, '')
+    if (value && !/^https:\/\/|^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(value)) {
+      onAction('feedback', 'Utilisez une adresse HTTPS (ou un serveur local).')
+      return
+    }
+    setShareServer(value)
+    onPreference('shareServer', value)
+    onAction('feedback', value ? 'Serveur de partage enregistré.' : 'Partage par lien désactivé.')
   }
 
   return (
@@ -106,7 +136,34 @@ export function SettingsView({ preferences, biometry, version, updateStatus, upd
                       <legend>Effacer le presse-papiers après une copie</legend>
                       <DelaySelector name="clipboard-clear-delay" className="clipboard-delay-options" value={preferences.clipboardDelay} options={clipboardOptions} onChange={(value) => onPreference('clipboardDelay', value)} />
                     </fieldset>
+                    <label className="settings-switch">
+                      <span><strong>Au verrouillage de la session</strong><small>{systemLock.supported ? 'Fermer le coffre quand l’ordinateur est verrouillé (Win+L, écran de verrouillage)' : 'Non disponible sur ce système'}</small></span>
+                      <input id="toggle-lock-on-session" type="checkbox" checked={systemLock.onSessionLock} disabled={!systemLock.supported} onChange={(event) => onAction('set-system-lock', { ...systemLock, onSessionLock: event.target.checked })} />
+                    </label>
+                    <label className="settings-switch">
+                      <span><strong>À la mise en veille</strong><small>{systemLock.supported ? 'Fermer le coffre en cas de veille ou de fermeture du capot' : 'Non disponible sur ce système'}</small></span>
+                      <input id="toggle-lock-on-sleep" type="checkbox" checked={systemLock.onSleep} disabled={!systemLock.supported} onChange={(event) => onAction('set-system-lock', { ...systemLock, onSleep: event.target.checked })} />
+                    </label>
+                    <label className="settings-switch">
+                      <span><strong>Masquer Clave des captures d’écran</strong><small>{screenProtection?.supported ? 'Les partages d’écran (Discord, Teams, Zoom) et les captures affichent un rectangle noir. Désactivez pour enregistrer un tutoriel.' : 'Non disponible sur ce système'}</small></span>
+                      <input id="toggle-screen-protection" type="checkbox" checked={Boolean(screenProtection?.enabled)} disabled={!screenProtection?.supported} onChange={(event) => onAction('set-screen-protection', event.target.checked)} />
+                    </label>
                   </article>
+
+                  <form className="settings-card" id="recovery-kit-form" onSubmit={submitRecoveryKit}>
+                    <div><p className="section-label">Récupération</p><h2>Kit de secours</h2></div>
+                    <div className="biometry-setting">
+                      <span className="settings-icon"><LifeBuoy size={20} /></span>
+                      <span>
+                        <strong id="recovery-kit-status">{recoveryConfigured ? 'Clé de récupération active' : 'Aucune clé de récupération'}</strong>
+                        <small>{recoveryConfigured ? 'Générer un nouveau kit invalide l’ancien.' : 'Sans elle, un mot de passe oublié rend le coffre inaccessible.'}</small>
+                      </span>
+                    </div>
+                    <label className="settings-field"><span>Mot de passe maître</span><input id="recovery-kit-password" type="password" value={recoveryPassword} onChange={(event) => setRecoveryPassword(event.target.value)} autoComplete="current-password" /></label>
+                    <button className={recoveryConfigured ? 'secondary-button' : 'primary-button'} id="create-recovery-kit" type="submit" disabled={recoveryPassword.length < 8}>
+                      {recoveryConfigured ? 'Générer un nouveau kit' : 'Créer le kit de secours'}
+                    </button>
+                  </form>
 
                   <article className="settings-card">
                     <div><p className="section-label">Accès rapide</p><h2>{authMethod}</h2></div>
@@ -147,6 +204,38 @@ export function SettingsView({ preferences, biometry, version, updateStatus, upd
                 </article>
               )}
 
+              {section === 'autofill' && (
+                <article className="settings-card settings-card-wide autofill-settings">
+                  <div className="autofill-heading">
+                    <div><p className="section-label">Navigateurs et applications</p><h2>Remplissage automatique</h2></div>
+                    <span className={`service-status ${autofill.running ? 'ready' : 'offline'}`}>
+                      {autofill.running ? 'Extension navigateur prête' : 'Service local indisponible'}
+                    </span>
+                  </div>
+                  <p className="settings-copy">L’extension Chrome et Edge peut proposer les comptes enregistrés dans les pages de connexion.</p>
+                  <label className="settings-switch">
+                    <span><strong>Autoriser l’extension Clave</strong><small>Chrome et Edge peuvent interroger ce coffre sur cet appareil</small></span>
+                    <input id="toggle-autofill" type="checkbox" checked={autofill.enabled} disabled={!autofill.running} onChange={(event) => onAction('set-autofill-enabled', event.target.checked)} />
+                  </label>
+                  <div className="pairing-panel">
+                    <div>
+                      <span>Code d’appairage</span>
+                      <code>{autofill.token ? `${autofill.token.slice(0, 6)}••••••••${autofill.token.slice(-4)}` : 'Indisponible'}</code>
+                      <small>Ce code donne accès au service local. Ne le partagez pas.</small>
+                    </div>
+                    <div className="settings-actions">
+                      <button className="secondary-button" id="copy-autofill-token" type="button" disabled={!autofill.token} onClick={() => onAction('copy-autofill-token')}><Copy size={15} /> Copier</button>
+                      <button className="text-button" id="rotate-autofill-token" type="button" disabled={!autofill.token} onClick={() => onAction('rotate-autofill-token')}><RefreshCw size={15} /> Renouveler</button>
+                    </div>
+                  </div>
+                  <ol className="autofill-steps">
+                    <li>Ouvrez <strong>chrome://extensions</strong> ou <strong>edge://extensions</strong>.</li>
+                    <li>Activez le mode développeur puis chargez le dossier <strong>browser-extension</strong>.</li>
+                    <li>Ouvrez les options de l’extension et collez le code d’appairage.</li>
+                  </ol>
+                </article>
+              )}
+
               {section === 'backup' && (
                 <article className="settings-card settings-card-wide">
                   <div><p className="section-label">Sauvegarde</p><h2>Import et export chiffrés</h2></div>
@@ -154,7 +243,7 @@ export function SettingsView({ preferences, biometry, version, updateStatus, upd
                   <div className="settings-actions">
                     <button className="secondary-button" id="settings-export-vault" type="button" onClick={() => onAction('export')}><Download size={16} /> Exporter</button>
                     <button className="secondary-button" id="settings-import-vault" type="button" onClick={() => onAction('import')}><Upload size={16} /> Importer</button>
-                    <button className="secondary-button" id="settings-import-browser" type="button" onClick={() => onAction('browser-import')}><Upload size={16} /> Depuis un navigateur</button>
+                    <button className="secondary-button" id="settings-import-browser" type="button" onClick={() => onAction('browser-import')}><Upload size={16} /> Depuis un navigateur ou un gestionnaire</button>
                   </div>
                   <div className="import-tutorial" aria-labelledby="import-tutorial-title">
                     <div className="import-tutorial-header">
@@ -181,7 +270,17 @@ export function SettingsView({ preferences, biometry, version, updateStatus, upd
                       <ol>
                         {browserImportSteps.map((step) => <li key={step}>{step}</li>)}
                       </ol>
-                      <p className="import-warning"><FileText size={15} /> Les fichiers CSV de navigateur ne sont généralement pas protégés. Gardez-les seulement le temps de l’import.</p>
+                      <p className="import-warning"><FileText size={15} /> Les fichiers exportés ne sont généralement pas protégés. Gardez-les seulement le temps de l’import.</p>
+                    </div>
+                    <div className="browser-import-guide">
+                      <div>
+                        <p className="section-label">Autres gestionnaires</p>
+                        <h4>Formats reconnus</h4>
+                      </div>
+                      <dl className="manager-formats">
+                        {managerFormats.map(([name, path]) => <div key={name}><dt>{name}</dt><dd>{path}</dd></div>)}
+                      </dl>
+                      <p className="settings-copy">Les dossiers Bitwarden, KeePass et LastPass deviennent des espaces ; les codes 2FA et les étiquettes sont conservés.</p>
                     </div>
                     <div className="import-help-links">
                       <a href="https://support.google.com/chrome/answer/95606" target="_blank" rel="noreferrer">Chrome</a>
@@ -190,9 +289,50 @@ export function SettingsView({ preferences, biometry, version, updateStatus, upd
                       <a href="https://support.apple.com/guide/safari/passwords-sfri40599/mac" target="_blank" rel="noreferrer">Safari</a>
                       <a href="https://bitwarden.com/help/export-your-data/" target="_blank" rel="noreferrer">Bitwarden</a>
                       <a href="https://support.1password.com/export/" target="_blank" rel="noreferrer">1Password</a>
+                      <a href="https://keepassxc.org/docs/KeePassXC_UserGuide" target="_blank" rel="noreferrer">KeePassXC</a>
                       <a href="https://support.dashlane.com/hc/articles/202625092" target="_blank" rel="noreferrer">Dashlane</a>
                     </div>
                   </div>
+                </article>
+              )}
+
+              {section === 'sharing' && (
+                <article className="settings-card settings-card-wide">
+                  <div><p className="section-label">Liens à usage unique</p><h2>Serveur de partage</h2></div>
+                  <p className="settings-copy">Les accès partagés sont chiffrés sur cet appareil, puis déposés sur votre serveur Clave auto-hébergé (dossier share-server). Le serveur ne reçoit jamais la clé, placée après le # du lien, et détruit le contenu dès la première ouverture ou à expiration.</p>
+                  <form className="settings-form" onSubmit={submitShareServer}>
+                    <label className="dialog-field"><span>Adresse du serveur</span><input id="share-server-input" type="url" inputMode="url" placeholder="https://partage.exemple.fr" value={shareServer} onChange={(event) => setShareServer(event.target.value)} /></label>
+                    <button className="secondary-button" id="save-share-server" type="submit">Enregistrer</button>
+                  </form>
+                </article>
+              )}
+
+              {section === 'sharing' && (
+                <article className="settings-card settings-card-wide" id="share-hosting-guide">
+                  <div><p className="section-label">Pas encore de serveur ?</p><h2>Héberger votre serveur</h2></div>
+                  <p className="settings-copy">Le serveur tient dans le dossier share-server du projet. Il consomme très peu : la plus petite offre d’un hébergeur suffit. Comptez une dizaine de minutes.</p>
+                  <ol className="share-guide">
+                    <li>
+                      <strong>Un serveur et un nom de domaine</strong>
+                      <span>Louez un petit VPS (environ 4 €/mois chez OVH, Hetzner, Scaleway…) ou utilisez un Raspberry Pi ou un NAS allumé en permanence. Chez votre registrar, ajoutez un enregistrement DNS de type A, par exemple partage.mondomaine.fr, qui pointe vers l’adresse IP du serveur.</span>
+                    </li>
+                    <li>
+                      <strong>Copier le dossier sur le serveur</strong>
+                      <span>Depuis votre PC, à la racine du projet :</span>
+                      <code>scp -r share-server root@IP_DU_SERVEUR:/opt/clave-share</code>
+                    </li>
+                    <li>
+                      <strong>Lancer avec Docker</strong>
+                      <span>Connecté au serveur (ssh root@IP_DU_SERVEUR), installez Docker puis démarrez. Le certificat HTTPS est obtenu et renouvelé automatiquement.</span>
+                      <code>curl -fsSL https://get.docker.com | sh</code>
+                      <code>cd /opt/clave-share && echo "DOMAIN=partage.mondomaine.fr" &gt; .env && docker compose up -d</code>
+                    </li>
+                    <li>
+                      <strong>Vérifier et brancher Clave</strong>
+                      <span>Ouvrez https://partage.mondomaine.fr/healthz dans un navigateur : la page doit afficher {'{"ok":true}'}. Saisissez ensuite cette adresse (sans /healthz) dans le champ ci-dessus.</span>
+                    </li>
+                  </ol>
+                  <p className="settings-copy share-guide-note">Juste pour essayer, sans serveur ni domaine : lancez node share-server/server.js sur votre PC, puis cloudflared tunnel --url http://localhost:8787, et collez l’adresse https://….trycloudflare.com obtenue. Installation sans Docker, nginx et dépannage : voir share-server/README.md.</p>
                 </article>
               )}
 

@@ -9,6 +9,7 @@
     "build": "tauri build",
     "web:dev": "vite",
     "web:build": "vite build",
+    "site": "python website/serve.py 4180",
     "web:preview": "vite preview --host 127.0.0.1 --port 4173",
     "build:mac-local": "tauri build --bundles app --target universal-apple-darwin",
     "build:mac-dmg": "tauri build --bundles dmg --target universal-apple-darwin",
