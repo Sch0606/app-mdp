@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Clave — Appairage</title>
+    <style>
+      body{margin:0;background:#f4f6f5;color:#17211c;font:15px/1.5 Arial,sans-serif}main{max-width:620px;margin:64px auto;padding:30px;background:white;border:1px solid #dce2df;border-radius:18px}h1{margin:0 0 8px;font-size:26px}p{color:#657169}label{display:grid;gap:7px;margin:24px 0 14px;font-weight:700}input{padding:12px;border:1px solid #bfc9c4;border-radius:10px;font:14px ui-monospace,monospace}button{padding:11px 16px;border:0;border-radius:10px;background:#0f7b4d;color:white;font-weight:700;cursor:pointer}#status{min-height:22px;margin-top:14px}.error{color:#a12e2e}.success{color:#0f7046}
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Connecter l’extension à Clave</h1>
+      <p>Dans Clave, ouvrez Paramètres → Remplissage, activez l’extension puis copiez le code d’appairage.</p>
+      <label for="token">Code d’appairage<input id="token" type="password" autocomplete="off" spellcheck="false"></label>
+      <button id="save" type="button">Enregistrer et tester</button>
+      <p id="status" role="status"></p>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

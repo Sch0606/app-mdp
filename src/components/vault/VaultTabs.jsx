@@ -1,8 +1,6 @@
-import { motion } from 'framer-motion'
-import { spring } from '../../motion/presets.js'
-
 const tabs = [
   ['access', 'Accès'],
+  ['health', 'Santé'],
   ['history', 'Historique'],
   ['trash', 'Poubelle'],
 ]
@@ -12,6 +10,11 @@ export function VaultTabs({ view, onChange }) {
 
   return (
     <div className="vault-tabs" role="tablist" style={{ '--selected-index': selectedIndex }}>
+      <span
+        aria-hidden="true"
+        className="vault-tab-selection"
+        style={{ transform: `translate3d(calc(${selectedIndex * 100}% + ${selectedIndex * 3}px), 0, 0)` }}
+      />
       {tabs.map(([value, label]) => {
         const active = value === view
         return (
@@ -23,7 +26,6 @@ export function VaultTabs({ view, onChange }) {
             aria-selected={active}
             onClick={() => onChange(value)}
           >
-            {active && <motion.span className="vault-tab-selection" layoutId="vault-tab-selection" transition={spring} />}
             <span>{label}</span>
           </button>
         )

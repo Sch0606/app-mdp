@@ -16,6 +16,11 @@ export const tauri = {
   invoke(command, args) {
     return getTauri().core.invoke(command, args)
   },
+  listen(eventName, handler) {
+    const api = getTauri()
+    if (!api.event?.listen) return Promise.resolve(() => {})
+    return api.event.listen(eventName, handler)
+  },
   get clipboard() {
     return getTauri().clipboardManager
   },
@@ -23,6 +28,11 @@ export const tauri = {
     return {
       check: checkUpdater,
     }
+  },
+  openUrl(url) {
+    const api = getTauri()
+    if (api.opener?.openUrl) return api.opener.openUrl(url)
+    return api.core.invoke('plugin:opener|open_url', { url })
   },
   get process() {
     return getTauri().process

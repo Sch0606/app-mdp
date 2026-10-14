@@ -70,7 +70,7 @@ test('change de réglage et déplace les indicateurs animés', async ({ page }) 
   await expect(page.locator('.settings-nav')).toHaveAttribute('style', /--selected-index: 1/)
   await page.locator('#close-settings').click()
   await page.getByRole('tab', { name: 'Historique' }).click()
-  await expect(page.locator('.vault-tabs')).toHaveAttribute('style', /--selected-index: 1/)
+  await expect(page.locator('.vault-tabs')).toHaveAttribute('style', /--selected-index: 2/)
 })
 
 test('ferme la recherche Ctrl+K lors d un clic en dehors', async ({ page }) => {
@@ -107,20 +107,21 @@ test('ne crée pas de barre horizontale au survol d une catégorie', async ({ pa
   expect(dimensions.scrollWidth).toBe(dimensions.clientWidth)
 })
 
-test('applique une interface plus aérée avec Geist et des boutons arrondis', async ({ page }) => {
+test('hiérarchise les actions sans empiler les grands blocs', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
 
   await expect(page.locator('body')).toHaveCSS('font-family', /Geist/)
-  await expect(page.locator('#new-access')).toHaveCSS('border-radius', '40px')
-  await expect(page.locator('#lock-now')).toHaveCSS('border-radius', '40px')
+  await expect(page.locator('.security-summary')).toBeVisible()
+  await expect(page.locator('.security-strip')).toHaveCount(0)
+  await expect(page.locator('#new-access')).toHaveCSS('border-radius', '7px')
 
   const mainPaddingTop = await page.locator('.main').evaluate(element => Number.parseFloat(getComputedStyle(element).paddingTop))
-  const toolbarGap = await page.locator('.toolbar').evaluate(element => Number.parseFloat(getComputedStyle(element).gap))
+  const lockWidth = await page.locator('#lock-now').evaluate(element => element.getBoundingClientRect().width)
   const listGap = await page.locator('#liste-mdp').evaluate(element => Number.parseFloat(getComputedStyle(element).gap))
 
-  expect(mainPaddingTop).toBeGreaterThanOrEqual(48)
-  expect(toolbarGap).toBeGreaterThanOrEqual(16)
-  expect(listGap).toBeGreaterThanOrEqual(14)
+  expect(mainPaddingTop).toBeLessThanOrEqual(36)
+  expect(lockWidth).toBeLessThanOrEqual(44)
+  expect(listGap).toBeLessThanOrEqual(10)
 })
 
 test('active le mode sombre depuis les parametres interface', async ({ page }) => {

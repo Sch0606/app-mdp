@@ -8,6 +8,8 @@
     "core:app:default",
     "updater:default",
     "process:allow-restart",
+    "opener:allow-open-url",
+    "opener:allow-default-urls",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
     "clipboard-manager:allow-clear"

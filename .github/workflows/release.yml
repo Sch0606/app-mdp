@@ -52,4 +52,16 @@ jobs:
           args: ${{ matrix.args }}
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
-          uploadUpdaterSignatures: true
+
+  verify-updater:
+    name: Verify updater manifest
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Check latest.json is published
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            "https://github.com/Sch0606/app-mdp/releases/latest/download/latest.json" \
+            | tee latest.json
+          grep -q '"version"' latest.json

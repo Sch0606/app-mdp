@@ -1,24 +1,10 @@
-import { ZxcvbnFactory } from '@zxcvbn-ts/core'
-import * as zxcvbnCommonPackage from '@zxcvbn-ts/language-common'
-import * as zxcvbnFrPackage from '@zxcvbn-ts/language-fr'
-
 const RECENT_WINDOW_SECONDS = 7 * 24 * 60 * 60
-const STALE_WINDOW_SECONDS = 90 * 24 * 60 * 60
 const PASSWORD_GROUPS = {
   lower: 'abcdefghijkmnopqrstuvwxyz',
   upper: 'ABCDEFGHJKLMNPQRSTUVWXYZ',
   numbers: '23456789',
   symbols: '!@#$%^&*()-_=+[]{};:,.?',
 }
-
-const zxcvbn = new ZxcvbnFactory({
-  dictionary: {
-    ...zxcvbnCommonPackage.dictionary,
-    ...zxcvbnFrPackage.dictionary,
-  },
-  graphs: zxcvbnCommonPackage.adjacencyGraphs,
-  translations: zxcvbnFrPackage.translations,
-})
 
 function randomIndex(max, cryptoApi) {
   const limit = Math.floor(0x100000000 / max) * max
@@ -84,63 +70,6 @@ export function normalizeSiteUrl(value = '') {
   }
 }
 
-function localPasswordWarnings(value) {
-  const normalized = normalizeText(value)
-  const warnings = []
-  if (/^(password|motdepasse|azerty|qwerty|admin|welcome|bonjour|iloveyou)/i.test(value)) {
-    warnings.push('Évitez les mots courants ou prévisibles.')
-  }
-  if (/(0123|1234|2345|3456|abcd|bcde|azerty|qwerty|asdf)/i.test(value)) {
-    warnings.push('Évitez les suites évidentes et les motifs de clavier.')
-  }
-  if (/(.)\1{2,}/.test(value)) {
-    warnings.push('Évitez les répétitions de caractères.')
-  }
-  if (/(19|20)\d{2}|[0-3]?\d[/-][01]?\d[/-]\d{2,4}/.test(value)) {
-    warnings.push('Évitez les dates faciles à deviner.')
-  }
-  if (normalized.includes('clave')) {
-    warnings.push('Évitez les mots liés à l’application ou au service.')
-  }
-  return warnings
-}
-
-function strengthLabel(score, password) {
-  if (!password) return { level: 'weak', label: 'Faible', percent: 0 }
-  if (score >= 4) return { level: 'very-strong', label: 'Très fort', percent: 100 }
-  if (score === 3) return { level: 'strong', label: 'Fort', percent: 78 }
-  if (score === 2) return { level: 'medium', label: 'Moyen', percent: 55 }
-  return { level: 'weak', label: 'Faible', percent: 24 }
-}
-
-export function passwordStrength(password = '', userInputs = []) {
-  const value = String(password)
-  const inputs = Array.isArray(userInputs) ? userInputs.filter(Boolean).map(String) : []
-  const estimate = value ? zxcvbn.check(value, inputs) : { score: 0, feedback: {} }
-  const localWarnings = localPasswordWarnings(value)
-  const adjustedScore = localWarnings.length && estimate.score > 1
-    ? Math.max(1, estimate.score - 1)
-    : estimate.score
-  const mapped = strengthLabel(adjustedScore, value)
-  const suggestions = [
-    estimate.feedback?.warning,
-    ...(estimate.feedback?.suggestions || []),
-    ...localWarnings,
-  ].filter(Boolean)
-
-  if (!suggestions.length && adjustedScore < 4) {
-    suggestions.push('Ajoutez quelques mots sans lien entre eux ou augmentez la longueur.')
-  }
-
-  return {
-    level: mapped.level,
-    label: mapped.label,
-    score: mapped.percent,
-    guesses: estimate.guesses,
-    suggestions,
-  }
-}
-
 export function normalizeTotpSecret(value = '') {
   const raw = String(value).trim()
   if (!raw) return ''
@@ -176,43 +105,47 @@ export function siteIconFallback(site = '', service = '') {
   return { iconUrl: '', source: 'fallback', fallbackLabel }
 }
 
+const MAX_TAGS = 12
+const MAX_TAG_LENGTH = 32
+
+// Même normalisation que `normalize_tags` côté Rust.
+export function normalizeTags(tags = []) {
+  const normalized = []
+  for (const tag of tags) {
+    const value = Array.from(String(tag).trim().replace(/^#+/, '').split(/\s+/).filter(Boolean).join('-').toLowerCase())
+      .slice(0, MAX_TAG_LENGTH)
+      .join('')
+    if (value && !normalized.includes(value)) normalized.push(value)
+    if (normalized.length >= MAX_TAGS) break
+  }
+  return normalized
+}
+
+export function collectTags(entries) {
+  const counts = new Map()
+  entries.forEach((entry) => (entry.tags || []).forEach((tag) => counts.set(tag, (counts.get(tag) || 0) + 1)))
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'fr'))
+    .map(([tag]) => tag)
+}
+
 export function filterEntries(entries, query = '', filter = 'all', now = Math.floor(Date.now() / 1000)) {
-  const normalizedQuery = normalizeText(query)
+  const terms = String(query).trim().split(/\s+/).filter(Boolean)
+  // `#banque` cherche une étiquette ; les autres mots cherchent dans le texte et les étiquettes.
+  const tagTerms = terms.filter((term) => term.startsWith('#') && term.length > 1).map((term) => normalizeText(term.slice(1)))
+  const normalizedQuery = normalizeText(terms.filter((term) => !term.startsWith('#')).join(' '))
+  const tagFilter = filter.startsWith('tag:') ? filter.slice(4) : ''
 
   return entries.filter((entry) => {
-    const searchable = normalizeText(`${entry.plateforme || ''} ${entry.email || ''} ${entry.site || ''}`)
+    const tags = entry.tags || []
+    const searchable = normalizeText(`${entry.plateforme || ''} ${entry.email || ''} ${entry.site || ''} ${tags.join(' ')}`)
     if (normalizedQuery && !searchable.includes(normalizedQuery)) return false
+    if (tagTerms.some((term) => !tags.some((tag) => normalizeText(tag).startsWith(term)))) return false
+    if (tagFilter) return tags.includes(tagFilter)
     if (filter === 'favorites') return Boolean(entry.favorite)
     if (filter === 'recent') return Number(entry.last_accessed || entry.last_used_at || 0) >= now - RECENT_WINDOW_SECONDS
     return true
   })
-}
-
-export function auditEntries(entries, now = Math.floor(Date.now() / 1000)) {
-  const passwordCounts = new Map()
-  entries.forEach((entry) => {
-    const password = String(entry.mdp || '')
-    if (password) passwordCounts.set(password, (passwordCounts.get(password) || 0) + 1)
-  })
-
-  const strengths = entries.map((entry) => passwordStrength(entry.mdp, [entry.plateforme, entry.email, entry.site]))
-  const weak = strengths.filter((strength) => strength.level === 'weak').length
-  const reused = entries.filter((entry) => (passwordCounts.get(String(entry.mdp || '')) || 0) > 1).length
-  const stale = entries.filter((entry) => {
-    const updatedAt = Number(entry.updated_at || 0)
-    return updatedAt > 0 && updatedAt < now - STALE_WINDOW_SECONDS
-  }).length
-  const total = entries.length
-  const averageStrength = total
-    ? Math.round(strengths.reduce((sum, strength) => sum + strength.score, 0) / total)
-    : 100
-  const reusePenalty = total ? Math.round((reused / total) * 20) : 0
-  const stalePenalty = total ? Math.round((stale / total) * 15) : 0
-  const weakPenalty = total ? Math.round((weak / total) * 8) : 0
-  const score = Math.max(0, Math.min(100, averageStrength - reusePenalty - stalePenalty - weakPenalty))
-  const label = score >= 90 ? 'Très bon' : score >= 75 ? 'Bon' : score >= 50 ? 'Moyen' : 'À renforcer'
-
-  return { weak, reused, stale, score, label, averageStrength, total }
 }
 
 export function allEntries(categories) {

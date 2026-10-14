@@ -1,0 +1,3 @@
+{$DOMAIN} {
+	reverse_proxy share-server:8787
+}

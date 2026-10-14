@@ -16,10 +16,15 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use thiserror::Error;
 
-const AUTH_VERSION: u8 = 1;
+const AUTH_VERSION: u8 = 2;
+const BACKUP_VERSION: u8 = 1;
 const VAULT_VERSION: u8 = 3;
 const KDF_ITERATIONS: u32 = 210_000;
 const AUTH_VERIFIER: &[u8] = b"clave-auth-v1";
+const KDF_NAME: &str = "PBKDF2-HMAC-SHA256";
+const RECOVERY_KEY_BYTES: usize = 20;
+const MAX_TAGS: usize = 12;
+const MAX_TAG_LENGTH: usize = 32;
 pub const PURGE_AFTER_SECONDS: u64 = 30 * 24 * 60 * 60;
 
 pub type CategoryMap = BTreeMap<String, Vec<PasswordEntry>>;
@@ -45,6 +50,8 @@ pub struct PasswordEntry {
     pub updated_at: u64,
     #[serde(default)]
     pub last_accessed: u64,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,6 +82,7 @@ struct VaultState {
 pub struct AuthStatus {
     pub configured: bool,
     pub unlocked: bool,
+    pub recovery_configured: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -84,6 +92,17 @@ struct AuthFile {
     iterations: u32,
     salt: String,
     verifier: String,
+    wrapped_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recovery: Option<KeySlot>,
+}
+
+/// Second emplacement de clé : la clé du coffre chiffrée par la clé de récupération.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct KeySlot {
+    kdf: String,
+    iterations: u32,
+    salt: String,
     wrapped_key: String,
 }
 
@@ -128,6 +147,8 @@ struct EncryptedEntry {
     updated_at: u64,
     #[serde(default)]
     last_accessed: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -166,6 +187,10 @@ pub enum StoreError {
     InvalidPassword,
     #[error("Element introuvable.")]
     NotFound,
+    #[error("Cle de recuperation incorrecte.")]
+    InvalidRecoveryKey,
+    #[error("Aucune cle de recuperation n'est configuree pour ce coffre.")]
+    RecoveryNotConfigured,
 }
 
 pub struct PasswordStore {
@@ -189,10 +214,15 @@ impl PasswordStore {
         AuthStatus {
             configured: self.auth_file.exists(),
             unlocked: self.vault_key.is_some(),
+            recovery_configured: self
+                .read_auth_file()
+                .map(|auth| auth.recovery.is_some())
+                .unwrap_or(false),
         }
     }
 
-    pub fn setup_master_password(&mut self, password: String) -> Result<(), StoreError> {
+    /// Crée le coffre et renvoie la clé de récupération à imprimer.
+    pub fn setup_master_password(&mut self, password: String) -> Result<String, StoreError> {
         if self.auth_file.exists() {
             return Err(StoreError::AuthAlreadyConfigured);
         }
@@ -202,7 +232,10 @@ impl PasswordStore {
         }
 
         let vault_key = self.load_legacy_key()?.unwrap_or_else(Self::generate_key);
-        let auth = self.build_auth_file(&password, &vault_key)?;
+        let recovery_key = Self::generate_recovery_key();
+        let recovery =
+            Self::build_key_slot(&Self::normalize_recovery_key(&recovery_key), &vault_key)?;
+        let auth = Self::build_auth_file(&password, &vault_key, Some(recovery))?;
         self.write_auth_file(&auth)?;
         self.vault_key = Some(vault_key);
 
@@ -210,6 +243,56 @@ impl PasswordStore {
             fs::remove_file(&self.key_file)?;
         }
 
+        Ok(recovery_key)
+    }
+
+    /// Ajoute ou remplace l'emplacement de récupération. Sert aussi à migrer
+    /// les coffres créés avant l'existence du kit de secours.
+    pub fn create_recovery_key(&mut self, password: String) -> Result<String, StoreError> {
+        self.unlock(password)?;
+        let vault_key = self.require_key()?;
+        let mut auth = self.read_auth_file()?;
+        let recovery_key = Self::generate_recovery_key();
+        auth.recovery = Some(Self::build_key_slot(
+            &Self::normalize_recovery_key(&recovery_key),
+            &vault_key,
+        )?);
+        auth.version = AUTH_VERSION;
+        self.write_auth_file(&auth)?;
+        Ok(recovery_key)
+    }
+
+    /// Ouvre le coffre avec la clé de récupération et définit un nouveau mot de passe maître.
+    /// L'emplacement de récupération est conservé : la même clé reste valable.
+    pub fn recover_with_key(
+        &mut self,
+        recovery_key: String,
+        new_password: String,
+    ) -> Result<(), StoreError> {
+        if !self.auth_file.exists() {
+            return Err(StoreError::AuthNotConfigured);
+        }
+        if new_password.trim().len() < 8 {
+            return Err(StoreError::InvalidPassword);
+        }
+
+        let auth = self.read_auth_file()?;
+        let slot = auth.recovery.ok_or(StoreError::RecoveryNotConfigured)?;
+        let normalized = Self::normalize_recovery_key(&recovery_key);
+        if normalized.is_empty() {
+            return Err(StoreError::InvalidRecoveryKey);
+        }
+        let salt = STANDARD
+            .decode(slot.salt.trim())
+            .map_err(|_| StoreError::InvalidKey)?;
+        let kek = Self::derive_key_from_parts(&normalized, &salt, slot.iterations);
+        let unwrapped = Self::decrypt_payload(&kek, &slot.wrapped_key)
+            .map_err(|_| StoreError::InvalidRecoveryKey)?;
+        let vault_key: [u8; 32] = unwrapped.try_into().map_err(|_| StoreError::InvalidKey)?;
+
+        let rebuilt = Self::build_auth_file(&new_password, &vault_key, Some(slot))?;
+        self.write_auth_file(&rebuilt)?;
+        self.vault_key = Some(vault_key);
         Ok(())
     }
 
@@ -246,7 +329,8 @@ impl PasswordStore {
 
         self.unlock(current_password)?;
         let vault_key = self.require_key()?;
-        let auth = self.build_auth_file(&new_password, &vault_key)?;
+        let recovery = self.read_auth_file()?.recovery;
+        let auth = Self::build_auth_file(&new_password, &vault_key, recovery)?;
         self.write_auth_file(&auth)?;
         Ok(())
     }
@@ -379,6 +463,7 @@ impl PasswordStore {
     ) -> Result<(), StoreError> {
         let mut state = self.load_state()?;
         let now = Self::now();
+        entry.tags = normalize_tags(&entry.tags);
         if entry.created_at == 0 {
             entry.created_at = now;
         }
@@ -399,6 +484,30 @@ impl PasswordStore {
         self.save_state(&state)
     }
 
+    /// Ajoute plusieurs accès en une seule écriture (imports).
+    pub fn add_passwords(&self, items: Vec<(String, PasswordEntry)>) -> Result<(), StoreError> {
+        let mut state = self.load_state()?;
+        let now = Self::now();
+        for (categorie, mut entry) in items {
+            entry.tags = normalize_tags(&entry.tags);
+            if entry.created_at == 0 {
+                entry.created_at = now;
+            }
+            entry.updated_at = now;
+            let entries = state.categories.entry(categorie.clone()).or_default();
+            let entry_index = entries.len();
+            entries.push(entry.clone());
+            state.history.push(ActivityRecord {
+                categorie,
+                action: "creation".into(),
+                entry,
+                timestamp: now,
+                entry_index,
+            });
+        }
+        self.save_state(&state)
+    }
+
     pub fn update_password(
         &self,
         categorie: String,
@@ -412,6 +521,7 @@ impl PasswordStore {
             .ok_or(StoreError::NotFound)?;
         let current = entries.get_mut(index).ok_or(StoreError::NotFound)?;
         let previous = current.clone();
+        entry.tags = normalize_tags(&entry.tags);
         entry.created_at = previous.created_at;
         entry.updated_at = Self::now();
         entry.last_accessed = previous.last_accessed;
@@ -451,6 +561,67 @@ impl PasswordStore {
             categorie,
             entry,
             timestamp,
+        });
+        self.save_state(&state)
+    }
+
+    /// Fusionne deux doublons : `keep` reçoit le mot de passe le plus récent,
+    /// les notes combinées et le secret 2FA manquant ; `drop` part à la
+    /// corbeille. L'ancienne version de `keep` reste dans l'historique.
+    pub fn merge_duplicates(
+        &self,
+        keep_category: String,
+        keep_index: usize,
+        drop_category: String,
+        drop_index: usize,
+    ) -> Result<(), StoreError> {
+        if keep_category == drop_category && keep_index == drop_index {
+            return Err(StoreError::NotFound);
+        }
+        let mut state = self.load_state()?;
+        let dropped = state
+            .categories
+            .get(&drop_category)
+            .and_then(|entries| entries.get(drop_index))
+            .cloned()
+            .ok_or(StoreError::NotFound)?;
+        let current = state
+            .categories
+            .get_mut(&keep_category)
+            .and_then(|entries| entries.get_mut(keep_index))
+            .ok_or(StoreError::NotFound)?;
+        let previous = current.clone();
+        let now = Self::now();
+
+        let mut merged = merge_entries(&previous, &dropped);
+        merged.updated_at = now;
+        *current = merged;
+
+        state.history.push(ActivityRecord {
+            categorie: keep_category,
+            action: "modification".into(),
+            entry: previous,
+            timestamp: now,
+            entry_index: keep_index,
+        });
+        // Retrait après la mise à jour : `keep_index` reste valide même si
+        // les deux entrées partagent la catégorie.
+        let removed = state
+            .categories
+            .get_mut(&drop_category)
+            .ok_or(StoreError::NotFound)?
+            .remove(drop_index);
+        state.history.push(ActivityRecord {
+            categorie: drop_category.clone(),
+            action: "suppression".into(),
+            entry: removed.clone(),
+            timestamp: now,
+            entry_index: drop_index,
+        });
+        state.trash.push(TrashRecord {
+            categorie: drop_category,
+            entry: removed,
+            timestamp: now,
         });
         self.save_state(&state)
     }
@@ -600,8 +771,8 @@ impl PasswordStore {
         let payload = serde_json::to_vec(&categories)?;
 
         let backup = BackupFile {
-            version: AUTH_VERSION,
-            kdf: "PBKDF2-HMAC-SHA256".to_string(),
+            version: BACKUP_VERSION,
+            kdf: KDF_NAME.to_string(),
             iterations: KDF_ITERATIONS,
             salt: STANDARD.encode(salt),
             payload: Self::encrypt_payload(&key, &payload)?,
@@ -674,9 +845,9 @@ impl PasswordStore {
     }
 
     fn build_auth_file(
-        &self,
         password: &str,
         vault_key: &[u8; 32],
+        recovery: Option<KeySlot>,
     ) -> Result<AuthFile, StoreError> {
         let mut salt = [0u8; 16];
         OsRng.fill_bytes(&mut salt);
@@ -684,12 +855,52 @@ impl PasswordStore {
 
         Ok(AuthFile {
             version: AUTH_VERSION,
-            kdf: "PBKDF2-HMAC-SHA256".to_string(),
+            kdf: KDF_NAME.to_string(),
             iterations: KDF_ITERATIONS,
             salt: STANDARD.encode(salt),
             verifier: Self::encrypt_payload(&kek, AUTH_VERIFIER)?,
             wrapped_key: Self::encrypt_payload(&kek, vault_key)?,
+            recovery,
         })
+    }
+
+    fn build_key_slot(secret: &str, vault_key: &[u8; 32]) -> Result<KeySlot, StoreError> {
+        let mut salt = [0u8; 16];
+        OsRng.fill_bytes(&mut salt);
+        let kek = Self::derive_key_from_parts(secret, &salt, KDF_ITERATIONS);
+        Ok(KeySlot {
+            kdf: KDF_NAME.to_string(),
+            iterations: KDF_ITERATIONS,
+            salt: STANDARD.encode(salt),
+            wrapped_key: Self::encrypt_payload(&kek, vault_key)?,
+        })
+    }
+
+    /// 160 bits aléatoires en Base32, groupés par 4 : `ABCD-EFGH-…` (8 groupes).
+    fn generate_recovery_key() -> String {
+        let mut bytes = [0u8; RECOVERY_KEY_BYTES];
+        OsRng.fill_bytes(&mut bytes);
+        data_encoding::BASE32_NOPAD
+            .encode(&bytes)
+            .as_bytes()
+            .chunks(4)
+            .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
+            .collect::<Vec<_>>()
+            .join("-")
+    }
+
+    /// Tolère tirets, espaces, minuscules et confusions 0/O, 1/I, 8/B à la saisie.
+    fn normalize_recovery_key(value: &str) -> String {
+        value
+            .chars()
+            .filter(|character| character.is_ascii_alphanumeric())
+            .map(|character| match character.to_ascii_uppercase() {
+                '0' => 'O',
+                '1' => 'I',
+                '8' => 'B',
+                other => other,
+            })
+            .collect()
     }
 
     fn encrypt_categories(
@@ -741,6 +952,7 @@ impl PasswordStore {
             created_at: entry.created_at,
             updated_at: entry.updated_at,
             last_accessed: entry.last_accessed,
+            tags: entry.tags.clone(),
         })
     }
 
@@ -765,6 +977,7 @@ impl PasswordStore {
             created_at: entry.created_at,
             updated_at: entry.updated_at,
             last_accessed: entry.last_accessed,
+            tags: entry.tags,
         })
     }
 
@@ -848,6 +1061,66 @@ impl PasswordStore {
             .map_err(|_| StoreError::InvalidKey)?;
         Ok(Some(bytes.try_into().map_err(|_| StoreError::InvalidKey)?))
     }
+}
+
+/// Étiquettes en minuscules, sans `#`, sans doublon, en nombre et longueur bornés.
+fn merge_entries(keep: &PasswordEntry, other: &PasswordEntry) -> PasswordEntry {
+    let fill = |primary: &str, fallback: &str| {
+        if primary.trim().is_empty() {
+            fallback.to_string()
+        } else {
+            primary.to_string()
+        }
+    };
+    let mut merged = keep.clone();
+    if (other.updated_at > keep.updated_at && !other.mdp.is_empty()) || keep.mdp.is_empty() {
+        merged.mdp = other.mdp.clone();
+    }
+    let (a, b) = (keep.notes.trim(), other.notes.trim());
+    merged.notes = if b.is_empty() || a.contains(b) {
+        keep.notes.clone()
+    } else if a.is_empty() || b.contains(a) {
+        other.notes.clone()
+    } else {
+        format!("{a}\n\n{b}")
+    };
+    merged.totp_secret = fill(&keep.totp_secret, &other.totp_secret);
+    merged.site = fill(&keep.site, &other.site);
+    merged.plateforme = fill(&keep.plateforme, &other.plateforme);
+    merged.icon_url = fill(&keep.icon_url, &other.icon_url);
+    merged.favorite = keep.favorite || other.favorite;
+    merged.created_at = match (keep.created_at, other.created_at) {
+        (0, other) => other,
+        (own, 0) => own,
+        (own, other) => own.min(other),
+    };
+    merged.last_accessed = keep.last_accessed.max(other.last_accessed);
+    let tags: Vec<String> = keep.tags.iter().chain(&other.tags).cloned().collect();
+    merged.tags = normalize_tags(&tags);
+    merged
+}
+
+pub fn normalize_tags(tags: &[String]) -> Vec<String> {
+    let mut normalized: Vec<String> = Vec::new();
+    for tag in tags {
+        let value: String = tag
+            .trim()
+            .trim_start_matches('#')
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join("-")
+            .to_lowercase()
+            .chars()
+            .take(MAX_TAG_LENGTH)
+            .collect();
+        if !value.is_empty() && !normalized.contains(&value) {
+            normalized.push(value);
+        }
+        if normalized.len() >= MAX_TAGS {
+            break;
+        }
+    }
+    normalized
 }
 
 #[cfg(test)]
@@ -1182,5 +1455,174 @@ mod tests {
         state.trash[0].timestamp = PasswordStore::now() - PURGE_AFTER_SECONDS - 1;
         store.save_state(&state).unwrap();
         assert!(store.trash().unwrap().is_empty());
+    }
+
+    #[test]
+    fn recovery_key_resets_the_master_password_and_stays_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store_in(dir.path());
+        let recovery_key = store
+            .setup_master_password("mot-de-passe-oublie".to_string())
+            .unwrap();
+        assert_eq!(recovery_key.split('-').count(), 8);
+        assert!(store.auth_status().recovery_configured);
+        store
+            .add_password(
+                "Perso".into(),
+                PasswordEntry {
+                    plateforme: "Banque".into(),
+                    mdp: "secret-bancaire".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let raw_auth = fs::read_to_string(dir.path().join("auth.json")).unwrap();
+        assert!(!raw_auth.contains(&recovery_key));
+
+        let mut locked = store_in(dir.path());
+        assert!(matches!(
+            locked.recover_with_key("AAAA-BBBB".into(), "nouveau-secret".into()),
+            Err(StoreError::InvalidRecoveryKey)
+        ));
+        let typed = recovery_key.to_lowercase().replace('-', " ");
+        locked
+            .recover_with_key(typed, "nouveau-secret".into())
+            .unwrap();
+        assert_eq!(locked.load().unwrap()["Perso"][0].mdp, "secret-bancaire");
+
+        let mut reopened = store_in(dir.path());
+        assert!(reopened.unlock("mot-de-passe-oublie".into()).is_err());
+        reopened.unlock("nouveau-secret".into()).unwrap();
+        reopened.lock();
+        reopened
+            .recover_with_key(recovery_key, "troisieme-secret".into())
+            .unwrap();
+    }
+
+    #[test]
+    fn legacy_auth_file_without_recovery_slot_is_migrated_on_demand() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store_in(dir.path());
+        store
+            .setup_master_password("mot-de-passe-solide".to_string())
+            .unwrap();
+        // Simule un coffre v1 : pas d'emplacement de récupération.
+        let mut auth = store.read_auth_file().unwrap();
+        auth.version = 1;
+        auth.recovery = None;
+        store.write_auth_file(&auth).unwrap();
+        assert!(!store.auth_status().recovery_configured);
+
+        let mut locked = store_in(dir.path());
+        assert!(matches!(
+            locked.recover_with_key("AAAA".into(), "nouveau-secret".into()),
+            Err(StoreError::RecoveryNotConfigured)
+        ));
+        assert!(locked.create_recovery_key("mauvais-secret".into()).is_err());
+        let key = locked
+            .create_recovery_key("mot-de-passe-solide".into())
+            .unwrap();
+        assert!(locked.auth_status().recovery_configured);
+        assert_eq!(locked.read_auth_file().unwrap().version, AUTH_VERSION);
+
+        locked
+            .change_master_password("mot-de-passe-solide".into(), "autre-secret".into())
+            .unwrap();
+        let mut again = store_in(dir.path());
+        again.recover_with_key(key, "final-secret".into()).unwrap();
+    }
+
+    #[test]
+    fn tags_are_normalized_and_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = unlocked_store(dir.path());
+        store
+            .add_password(
+                "Perso".into(),
+                PasswordEntry {
+                    plateforme: "Banque".into(),
+                    mdp: "secret".into(),
+                    tags: vec![
+                        "#Banque".into(),
+                        " travail ".into(),
+                        "banque".into(),
+                        "  ".into(),
+                        "carte bleue".into(),
+                    ],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            store.load().unwrap()["Perso"][0].tags,
+            vec!["banque", "travail", "carte-bleue"]
+        );
+    }
+
+    #[test]
+    fn duplicates_merge_into_the_kept_entry_and_send_the_other_to_trash() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = unlocked_store(dir.path());
+        let mut state = store.load_state().unwrap();
+        state.categories.insert(
+            "Perso".into(),
+            vec![
+                PasswordEntry {
+                    plateforme: "GitHub".into(),
+                    email: "moi@x.fr".into(),
+                    mdp: "nouveau".into(),
+                    site: "https://github.com".into(),
+                    notes: "Compte perso".into(),
+                    tags: vec!["dev".into()],
+                    created_at: 50,
+                    updated_at: 200,
+                    ..Default::default()
+                },
+                PasswordEntry {
+                    plateforme: "GitHub".into(),
+                    email: "moi@x.fr".into(),
+                    mdp: "ancien".into(),
+                    site: "www.github.com".into(),
+                    notes: "Import Edge".into(),
+                    totp_secret: "JBSWY3DPEHPK3PXP".into(),
+                    tags: vec!["import".into()],
+                    favorite: true,
+                    created_at: 10,
+                    updated_at: 100,
+                    ..Default::default()
+                },
+            ],
+        );
+        store.save_state(&state).unwrap();
+
+        // Garde l'entrée d'index 1 : le mot de passe le plus récent vient de l'autre.
+        store
+            .merge_duplicates("Perso".into(), 1, "Perso".into(), 0)
+            .unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded["Perso"].len(), 1);
+        let merged = &loaded["Perso"][0];
+        assert_eq!(merged.mdp, "nouveau");
+        assert_eq!(
+            merged.notes,
+            "Import Edge
+
+Compte perso"
+        );
+        assert_eq!(merged.totp_secret, "JBSWY3DPEHPK3PXP");
+        assert_eq!(merged.tags, vec!["import", "dev"]);
+        assert!(merged.favorite);
+        assert_eq!(merged.created_at, 10);
+
+        let trash = store.trash().unwrap();
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].entry.mdp, "nouveau");
+        let history = store.history().unwrap();
+        assert_eq!(history.last().unwrap().action, "suppression");
+        assert_eq!(history[history.len() - 2].entry.mdp, "ancien");
+
+        assert!(store
+            .merge_duplicates("Perso".into(), 0, "Perso".into(), 0)
+            .is_err());
     }
 }

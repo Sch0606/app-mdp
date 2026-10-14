@@ -1,11 +1,11 @@
 import { test, expect } from '@playwright/test'
 
-async function installTauri(page, { biometricFailure = false, rawCancelFailure = false } = {}) {
-  await page.addInitScript(({ biometricFailure, rawCancelFailure }) => {
+async function installTauri(page, { biometricFailure = false, rawCancelFailure = false, biometryType = 'WindowsHello' } = {}) {
+  await page.addInitScript(({ biometricFailure, rawCancelFailure, biometryType }) => {
     const invoke = async (command) => {
       if (command === 'auth_status') return { configured: true, unlocked: false }
       if (command === 'biometrie_status') {
-        return { isAvailable: true, isEnabled: true, biometryType: 'WindowsHello', error: null }
+        return { isAvailable: true, isEnabled: true, biometryType, error: null }
       }
       if (command === 'deverrouiller_biometrie') {
         await new Promise((resolve) => setTimeout(resolve, 350))
@@ -25,7 +25,7 @@ async function installTauri(page, { biometricFailure = false, rawCancelFailure =
       process: { relaunch: async () => {} },
       app: { getVersion: async () => '0.3.0' },
     }
-  }, { biometricFailure, rawCancelFailure })
+  }, { biometricFailure, rawCancelFailure, biometryType })
 }
 
 test('deverrouille le coffre avec le mot de passe', async ({ page }) => {
@@ -76,4 +76,14 @@ test('masque le message natif Windows Hello quand l utilisateur annule', async (
   await expect(page.getByRole('alert')).toContainText('Authentification non confirmée.')
   await expect(page.getByRole('alert')).not.toContainText('Decryption failed')
   await expect(page.getByRole('alert')).not.toContainText('HRESULT')
+})
+
+test('identifie Touch ID et conserve le mot de passe comme solution de repli', async ({ page }) => {
+  await installTauri(page, { biometricFailure: true, biometryType: 'TouchID' })
+  await page.goto('/')
+
+  await page.getByRole('button', { name: 'Déverrouiller avec Touch ID' }).click()
+  await expect(page.getByRole('alert')).toContainText('Authentification annulée.')
+  await expect(page.getByLabel('Mot de passe maître')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Déverrouiller', exact: true })).toBeVisible()
 })

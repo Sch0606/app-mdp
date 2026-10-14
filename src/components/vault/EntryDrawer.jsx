@@ -1,12 +1,13 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { Eye, EyeOff, KeyRound, Sparkles, X } from 'lucide-react'
+import { Eye, EyeOff, Hash, KeyRound, Sparkles, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { normalizeSiteUrl, normalizeTotpSecret, passwordStrength, siteIconFallback } from '../../lib/security.js'
+import { normalizeSiteUrl, normalizeTags, normalizeTotpSecret, siteIconFallback } from '../../lib/security.js'
 import { tauri } from '../../lib/tauri.js'
 import { softSpring } from '../../motion/presets.js'
 
-const blankEntry = { plateforme: '', email: '', mdp: '', site: '', notes: '', totp_secret: '', icon_url: '' }
+const blankEntry = { plateforme: '', email: '', mdp: '', site: '', notes: '', totp_secret: '', icon_url: '', tags: [] }
 const defaultGenerator = { length: 20, numbers: true, symbols: true, readable: false }
+const pendingStrength = { level: 'medium', label: 'Analyse', score: 0, suggestions: [] }
 
 export function EntryDrawer({ open, entry, onClose, onSave, onGenerate }) {
   const reduced = useReducedMotion()
@@ -15,11 +16,14 @@ export function EntryDrawer({ open, entry, onClose, onSave, onGenerate }) {
   const [saving, setSaving] = useState(false)
   const [generator, setGenerator] = useState(defaultGenerator)
   const [iconPreview, setIconPreview] = useState(siteIconFallback('', ''))
+  const [strength, setStrength] = useState(pendingStrength)
+  const [tagDraft, setTagDraft] = useState('')
   const iconRequest = useRef(0)
 
   useEffect(() => {
-    setForm(entry ? { ...blankEntry, ...entry } : blankEntry)
+    setForm(entry ? { ...blankEntry, ...entry, tags: entry.tags || [] } : blankEntry)
     setVisible(false)
+    setTagDraft('')
   }, [entry, open])
 
   useEffect(() => {
@@ -35,7 +39,7 @@ export function EntryDrawer({ open, entry, onClose, onSave, onGenerate }) {
     iconRequest.current = requestId
     const timer = setTimeout(async () => {
       try {
-        const result = await tauri.invoke('resoudre_icone_site', { site: normalizedSite })
+        const result = await tauri.invoke('resoudre_icone_site', { site: normalizedSite, service: form.plateforme })
         if (iconRequest.current !== requestId) return
         const fallback = siteIconFallback(normalizedSite, form.plateforme)
         update('icon_url', result?.iconUrl || '')
@@ -55,12 +59,31 @@ export function EntryDrawer({ open, entry, onClose, onSave, onGenerate }) {
     setForm((current) => ({ ...current, [field]: value }))
   }
 
+  function commitTagDraft(value = tagDraft) {
+    const additions = value.split(/[,;]/)
+    setForm((current) => ({ ...current, tags: normalizeTags([...current.tags, ...additions]) }))
+    setTagDraft('')
+  }
+
+  function removeTag(tag) {
+    setForm((current) => ({ ...current, tags: current.tags.filter((value) => value !== tag) }))
+  }
+
+  function onTagKeyDown(event) {
+    if (event.key === 'Enter' || event.key === ',') {
+      event.preventDefault()
+      if (tagDraft.trim()) commitTagDraft()
+    } else if (event.key === 'Backspace' && !tagDraft && form.tags.length) {
+      removeTag(form.tags[form.tags.length - 1])
+    }
+  }
+
   async function submit(event) {
     event.preventDefault()
     if (!form.plateforme.trim() || !form.mdp || saving) return
     setSaving(true)
     try {
-      await onSave({ ...form, totp_secret: normalizeTotpSecret(form.totp_secret) })
+      await onSave({ ...form, tags: normalizeTags([...form.tags, ...tagDraft.split(/[,;]/)]), totp_secret: normalizeTotpSecret(form.totp_secret) })
     } finally {
       setSaving(false)
     }
@@ -71,7 +94,14 @@ export function EntryDrawer({ open, entry, onClose, onSave, onGenerate }) {
     if (password) update('mdp', password)
   }
 
-  const strength = passwordStrength(form.mdp, [form.plateforme, form.email, form.site])
+  useEffect(() => {
+    let active = true
+    if (!open) return undefined
+    import('../../lib/passwordStrength.js').then(({ passwordStrength }) => {
+      if (active) setStrength(passwordStrength(form.mdp, [form.plateforme, form.email, form.site]))
+    })
+    return () => { active = false }
+  }, [form.mdp, form.plateforme, form.email, form.site, open])
 
   return (
     <AnimatePresence>
@@ -90,9 +120,9 @@ export function EntryDrawer({ open, entry, onClose, onSave, onGenerate }) {
           <motion.aside
             className="entry-panel entry-drawer"
             aria-label={entry ? 'Modifier l’accès' : 'Nouvel accès'}
-            initial={reduced ? { opacity: 0 } : { opacity: 0, x: 28, filter: 'blur(3px)' }}
-            animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
-            exit={reduced ? { opacity: 0 } : { opacity: 0, x: 12, filter: 'blur(2px)' }}
+            initial={reduced ? { opacity: 0 } : { opacity: 0, x: 28 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={reduced ? { opacity: 0 } : { opacity: 0, x: 12 }}
             transition={reduced ? { duration: 0.01 } : softSpring}
           >
             <header className="drawer-heading">
@@ -138,6 +168,19 @@ export function EntryDrawer({ open, entry, onClose, onSave, onGenerate }) {
                 <small>{iconPreview.iconUrl ? 'Icône du site détectée' : 'Icône par défaut'}</small>
               </div>
               <label><span>Code 2FA / OTP</span><input id="entry-totp" value={form.totp_secret} onChange={(event) => update('totp_secret', event.target.value)} placeholder="Clé Base32 ou otpauth://" /></label>
+              <div className="tag-field">
+                <label htmlFor="entry-tags">Étiquettes</label>
+                <div className="tag-input">
+                  <Hash size={15} aria-hidden="true" />
+                  {form.tags.map((tag) => (
+                    <span className="tag-chip" key={tag}>
+                      #{tag}
+                      <button type="button" onClick={() => removeTag(tag)} aria-label={`Retirer l’étiquette ${tag}`}><X size={12} /></button>
+                    </span>
+                  ))}
+                  <input id="entry-tags" value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} onKeyDown={onTagKeyDown} onBlur={() => { if (tagDraft.trim()) commitTagDraft() }} placeholder={form.tags.length ? '' : 'travail, banque…'} />
+                </div>
+              </div>
               <label><span>Notes</span><textarea id="entry-notes" rows="4" value={form.notes} onChange={(event) => update('notes', event.target.value)} /></label>
               <div className="drawer-actions">
                 <button type="button" className="secondary-button" onClick={onClose}>Annuler</button>

@@ -1,14 +1,22 @@
-import { Copy, Pencil, Trash2, UserRound } from 'lucide-react'
+import { Copy, Link2, Pencil, Trash2, UserRound } from 'lucide-react'
+import { ContextMenu } from './ContextMenu.jsx'
 
-export function EntryContextMenu({ target, position, onEdit, onCopyPassword, onCopyEmail, onDelete }) {
-  if (!target) return <div id="entry-menu" className="context-menu entry-context-menu" aria-hidden="true" />
-
+export function EntryContextMenu({ target, position, returnFocus, onClose, onEdit, onCopyPassword, onCopyEmail, onShare, onDelete }) {
   return (
-    <div id="entry-menu" className="context-menu entry-context-menu visible" role="menu" aria-hidden="false" style={{ left: position.x, top: position.y }}>
-      <button id="entry-menu-edit" type="button" role="menuitem" onClick={onEdit}><Pencil size={15} /> Modifier</button>
-      <button id="entry-menu-copy-email" type="button" role="menuitem" onClick={onCopyEmail}><UserRound size={15} /> Copier l’identifiant</button>
-      <button id="entry-menu-copy" type="button" role="menuitem" onClick={onCopyPassword}><Copy size={15} /> Copier le mot de passe</button>
-      <button id="entry-menu-delete" className="danger" type="button" role="menuitem" onClick={onDelete}><Trash2 size={15} /> Supprimer</button>
-    </div>
+    <ContextMenu
+      id="entry-menu"
+      open={Boolean(target)}
+      label="Actions de l’accès"
+      position={position}
+      returnFocus={returnFocus}
+      onClose={onClose}
+      items={[
+        { id: 'entry-menu-edit', label: 'Modifier', icon: <Pencil size={15} />, onSelect: onEdit },
+        { id: 'entry-menu-copy-email', label: 'Copier l’identifiant', icon: <UserRound size={15} />, onSelect: onCopyEmail },
+        { id: 'entry-menu-copy', label: 'Copier le mot de passe', icon: <Copy size={15} />, onSelect: onCopyPassword },
+        { id: 'entry-menu-share', label: 'Partager par lien', icon: <Link2 size={15} />, onSelect: onShare },
+        { id: 'entry-menu-delete', label: 'Supprimer', icon: <Trash2 size={15} />, danger: true, onSelect: onDelete },
+      ]}
+    />
   )
 }

@@ -1,24 +1,37 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { useEffect, useReducer, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { LaunchScreen } from './components/auth/LaunchScreen.jsx'
 import { LockScreen } from './components/auth/LockScreen.jsx'
-import { EntryContextMenu } from './components/overlays/EntryContextMenu.jsx'
-import { CommandPalette } from './components/overlays/CommandPalette.jsx'
-import { CategoryContextMenu } from './components/overlays/CategoryContextMenu.jsx'
-import { Dialog } from './components/overlays/Dialog.jsx'
-import { BackupDialog } from './components/overlays/BackupDialog.jsx'
-import { ImportPreviewDialog } from './components/overlays/ImportPreviewDialog.jsx'
 import { Toast } from './components/overlays/Toast.jsx'
-import { SettingsView } from './components/settings/SettingsView.jsx'
-import { EntryDrawer } from './components/vault/EntryDrawer.jsx'
-import { VaultWorkspace } from './components/vault/VaultWorkspace.jsx'
 import { tauri, errorMessage } from './lib/tauri.js'
+import { refreshVaultFromExternalChange } from './lib/externalVaultSync.js'
 import { motionProps } from './motion/presets.js'
 import { initialVaultState, vaultReducer } from './state/vaultReducer.js'
-import { allEntries, generateSecurePassword, normalizeSiteUrl } from './lib/security.js'
+import { allEntries, generateSecurePassword, normalizeSiteUrl, normalizeTags } from './lib/security.js'
+
+const BackupDialog = lazy(() => import('./components/overlays/BackupDialog.jsx').then((module) => ({ default: module.BackupDialog })))
+const CategoryContextMenu = lazy(() => import('./components/overlays/CategoryContextMenu.jsx').then((module) => ({ default: module.CategoryContextMenu })))
+const CommandPalette = lazy(() => import('./components/overlays/CommandPalette.jsx').then((module) => ({ default: module.CommandPalette })))
+const Dialog = lazy(() => import('./components/overlays/Dialog.jsx').then((module) => ({ default: module.Dialog })))
+const EntryContextMenu = lazy(() => import('./components/overlays/EntryContextMenu.jsx').then((module) => ({ default: module.EntryContextMenu })))
+const ShareDialog = lazy(() => import('./components/overlays/ShareDialog.jsx').then((module) => ({ default: module.ShareDialog })))
+const RecoveryKitDialog = lazy(() => import('./components/overlays/RecoveryKitDialog.jsx').then((module) => ({ default: module.RecoveryKitDialog })))
+const ImportPreviewDialog = lazy(() => import('./components/overlays/ImportPreviewDialog.jsx').then((module) => ({ default: module.ImportPreviewDialog })))
+const EntryDrawer = lazy(() => import('./components/vault/EntryDrawer.jsx').then((module) => ({ default: module.EntryDrawer })))
+const SettingsView = lazy(() => import('./components/settings/SettingsView.jsx').then((module) => ({ default: module.SettingsView })))
+const VaultWorkspace = lazy(() => import('./components/vault/VaultWorkspace.jsx').then((module) => ({ default: module.VaultWorkspace })))
 
 const emptyBiometry = { isAvailable: false, isEnabled: false, biometryType: 'None', error: null }
+const defaultSystemLock = { supported: false, onSessionLock: true, onSleep: true }
+const defaultScreenProtection = { supported: false, enabled: true }
+const emptyActivityItems = []
 const SLEEP_GAP_THRESHOLD_MS = 5000
+
+function useEventCallback(callback) {
+  const callbackRef = useRef(callback)
+  callbackRef.current = callback
+  return useCallback((...args) => callbackRef.current(...args), [])
+}
 
 function updateErrorMessage(cause) {
   const message = errorMessage(cause, 'La recherche de mise à jour est indisponible pour le moment.')
@@ -35,33 +48,42 @@ export function App() {
   const inactivityTimer = useRef()
   const biometricResetTimer = useRef()
   const sessionGeneration = useRef(0)
+  const activityRequestGeneration = useRef({ history: 0, trash: 0 })
   const lastHeartbeat = useRef(Date.now())
   const importInputRef = useRef(null)
   const browserImportInputRef = useRef(null)
   const [phase, setPhase] = useState('loading')
   const [screen, setScreen] = useState('vault')
   const [configured, setConfigured] = useState(true)
+  const [recoveryAvailable, setRecoveryAvailable] = useState(false)
+  const [recoveryKit, setRecoveryKit] = useState(null)
+  const [systemLock, setSystemLock] = useState(defaultSystemLock)
+  const [screenProtection, setScreenProtection] = useState(defaultScreenProtection)
   const [biometry, setBiometry] = useState(emptyBiometry)
   const [biometricState, setBiometricState] = useState('idle')
   const [vault, dispatch] = useReducer(vaultReducer, initialVaultState)
   const [drawer, setDrawer] = useState(null)
   const [entryMenu, setEntryMenu] = useState(null)
+  const [shareTarget, setShareTarget] = useState(null)
+  const [settingsSection, setSettingsSection] = useState('security')
   const [categoryMenu, setCategoryMenu] = useState(null)
   const [categoryDialog, setCategoryDialog] = useState(null)
   const [backupDialog, setBackupDialog] = useState(null)
   const [importPreview, setImportPreview] = useState([])
   const [commandOpen, setCommandOpen] = useState(false)
-  const [activityItems, setActivityItems] = useState([])
+  const [activityItems, setActivityItems] = useState({ history: [], trash: [] })
   const [toast, setToast] = useState('')
   const [version, setVersion] = useState('')
   const [updateStatus, setUpdateStatus] = useState('Version installée.')
   const [pendingUpdate, setPendingUpdate] = useState(null)
+  const [autofill, setAutofill] = useState({ enabled: false, running: false, port: 32191, token: '' })
   const [preferences, setPreferences] = useState(() => ({
     autoLockDelay: Number(localStorage.getItem('clave-auto-lock-delay') || 300000),
     clipboardDelay: Number(localStorage.getItem('clave-clipboard-clear-delay') || 30000),
     showToolbarLock: localStorage.getItem('clave-show-toolbar-lock') !== 'false',
     darkMode: localStorage.getItem('clave-dark-mode') === 'true',
     lockHotkey: localStorage.getItem('clave-lock-hotkey') || '',
+    shareServer: localStorage.getItem('clave-share-server') || '',
   }))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -77,6 +99,7 @@ export function App() {
         ])
         if (!active) return
         setConfigured(auth.configured)
+        setRecoveryAvailable(Boolean(auth.recovery_configured))
         setBiometry(biometricStatus || emptyBiometry)
         if (auth.unlocked) {
           const data = await tauri.invoke('charger')
@@ -110,13 +133,52 @@ export function App() {
   }, [phase])
 
   useEffect(() => {
-    function closeMenu(event) {
-      if (!event.target.closest?.('#entry-menu, .entry-more')) setEntryMenu(null)
-      if (!event.target.closest?.('#category-menu, .categories li')) setCategoryMenu(null)
+    if (phase !== 'unlocked') return undefined
+
+    let active = true
+    let stopListening = () => {}
+
+    tauri.listen('vault-changed', async () => {
+      try {
+        const refreshed = await refreshVaultFromExternalChange({
+          phase,
+          invoke: tauri.invoke,
+          dispatch,
+        })
+        if (active && refreshed) showToast('Accès enregistré depuis le navigateur.')
+      } catch (cause) {
+        if (active) showToast(errorMessage(cause, 'Le coffre n’a pas pu être actualisé.'))
+      }
+    }).then((unlisten) => {
+      if (active) stopListening = unlisten
+      else unlisten()
+    }).catch(() => {})
+
+    return () => {
+      active = false
+      stopListening()
     }
-    document.addEventListener('pointerdown', closeMenu)
-    return () => document.removeEventListener('pointerdown', closeMenu)
-  }, [])
+  }, [phase])
+
+  useEffect(() => {
+    if (phase !== 'unlocked') return undefined
+
+    let active = true
+    let stopListening = () => {}
+
+    // Le coffre est déjà fermé côté Rust : on efface l'état de l'interface.
+    tauri.listen('system-locked', () => {
+      if (active) lockVault()
+    }).then((unlisten) => {
+      if (active) stopListening = unlisten
+      else unlisten()
+    }).catch(() => {})
+
+    return () => {
+      active = false
+      stopListening()
+    }
+  }, [phase])
 
   useEffect(() => () => {
     clearTimeout(toastTimer.current)
@@ -152,17 +214,26 @@ export function App() {
   useEffect(() => {
     if (phase !== 'unlocked' || preferences.autoLockDelay === 0) return undefined
 
-    function scheduleLock() {
-      clearTimeout(inactivityTimer.current)
-      inactivityTimer.current = setTimeout(() => lockVault(), preferences.autoLockDelay)
+    let lastActivityAt = Date.now()
+    function verifyInactivity() {
+      const remaining = preferences.autoLockDelay - (Date.now() - lastActivityAt)
+      if (remaining <= 0) {
+        lockVault()
+        return
+      }
+      inactivityTimer.current = setTimeout(verifyInactivity, remaining)
+    }
+
+    function registerActivity() {
+      lastActivityAt = Date.now()
     }
 
     const events = ['pointerdown', 'keydown', 'wheel']
-    events.forEach((eventName) => document.addEventListener(eventName, scheduleLock, { passive: true }))
-    scheduleLock()
+    events.forEach((eventName) => document.addEventListener(eventName, registerActivity, { passive: true }))
+    inactivityTimer.current = setTimeout(verifyInactivity, preferences.autoLockDelay)
     return () => {
       clearTimeout(inactivityTimer.current)
-      events.forEach((eventName) => document.removeEventListener(eventName, scheduleLock))
+      events.forEach((eventName) => document.removeEventListener(eventName, registerActivity))
     }
   }, [phase, preferences.autoLockDelay])
 
@@ -201,11 +272,35 @@ export function App() {
     setBusy(true)
     setError('')
     try {
-      const command = configured ? 'unlock' : 'setup_master_password'
-      await tauri.invoke(command, { password })
-      await openVault()
+      if (configured) {
+        await tauri.invoke('unlock', { password })
+        await openVault()
+        if (!recoveryAvailable) showToast('Créez votre kit de secours dans Paramètres › Sécurité.')
+      } else {
+        const result = await tauri.invoke('setup_master_password', { password })
+        await openVault()
+        if (result?.recoveryKey) {
+          setRecoveryAvailable(true)
+          setRecoveryKit({ key: result.recoveryKey, mode: 'setup' })
+        }
+      }
     } catch (cause) {
       setError(errorMessage(cause, 'Mot de passe incorrect.'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function recoverWithKey(recoveryKey, newPassword) {
+    setBusy(true)
+    setError('')
+    try {
+      await tauri.invoke('recuperer_coffre', { cleRecuperation: recoveryKey, nouveauPassword: newPassword })
+      setBiometry(await tauri.invoke('biometrie_status').catch(() => emptyBiometry))
+      await openVault()
+      showToast('Coffre récupéré. Le nouveau mot de passe maître est actif.')
+    } catch (cause) {
+      setError(errorMessage(cause, 'Clé de récupération incorrecte.'))
     } finally {
       setBusy(false)
     }
@@ -244,6 +339,7 @@ export function App() {
       notes: form.notes,
       totpSecret: form.totp_secret.trim(),
       iconUrl: form.icon_url || '',
+      tags: normalizeTags(form.tags || []),
     }
 
     try {
@@ -260,6 +356,7 @@ export function App() {
             notes: payload.notes,
             totp_secret: payload.totpSecret,
             icon_url: payload.iconUrl,
+            tags: payload.tags,
             updated_at: Math.floor(Date.now() / 1000),
           }],
         }
@@ -421,8 +518,11 @@ export function App() {
     setCategoryDialog(null)
     setBackupDialog(null)
     setImportPreview([])
+    setRecoveryKit(null)
     setCommandOpen(false)
-    setActivityItems([])
+    activityRequestGeneration.current.history += 1
+    activityRequestGeneration.current.trash += 1
+    setActivityItems({ history: [], trash: [] })
     setToast('')
     setError('')
     setPendingUpdate(null)
@@ -441,6 +541,19 @@ export function App() {
     }
   }
 
+  async function shareEntry(entry, options) {
+    try {
+      return await tauri.invoke('partager_acces', {
+        categorie: entry.category,
+        index: entry.index,
+        serveur: preferences.shareServer,
+        options,
+      })
+    } catch (cause) {
+      return { error: errorMessage(cause, 'Le lien de partage n’a pas pu être créé.') }
+    }
+  }
+
   function updatePreference(name, value) {
     setPreferences((current) => ({ ...current, [name]: value }))
     const storageKeys = {
@@ -449,16 +562,39 @@ export function App() {
       showToolbarLock: 'clave-show-toolbar-lock',
       darkMode: 'clave-dark-mode',
       lockHotkey: 'clave-lock-hotkey',
+      shareServer: 'clave-share-server',
     }
     localStorage.setItem(storageKeys[name], String(value))
   }
 
-  async function openSettings() {
+  async function openSettings(section = 'security') {
+    setSettingsSection(section)
     setScreen('settings')
     try {
       setVersion(await tauri.app.getVersion())
     } catch (_) {
       setVersion('')
+    }
+    try {
+      setAutofill(await tauri.invoke('autofill_status'))
+    } catch (_) {
+      setAutofill((current) => ({ ...current, running: false }))
+    }
+    try {
+      setSystemLock({ ...defaultSystemLock, ...(await tauri.invoke('verrouillage_systeme_status')) })
+    } catch (_) {
+      setSystemLock(defaultSystemLock)
+    }
+    try {
+      setScreenProtection({ ...defaultScreenProtection, ...(await tauri.invoke('protection_ecran_status')) })
+    } catch (_) {
+      setScreenProtection(defaultScreenProtection)
+    }
+    try {
+      const auth = await tauri.invoke('auth_status')
+      setRecoveryAvailable(Boolean(auth?.recovery_configured))
+    } catch (_) {
+      // Statut indicatif uniquement.
     }
   }
 
@@ -479,10 +615,15 @@ export function App() {
           showToast('Biométrie désactivée.')
           break
         }
-        case 'change-password':
+        case 'change-password': {
           await tauri.invoke('changer_mot_de_passe_maitre', { ancienPassword: payload.old, nouveauPassword: payload.next })
-          showToast('Mot de passe maître modifié.')
+          const nextBiometry = await tauri.invoke('biometrie_status').catch(() => biometry)
+          setBiometry(nextBiometry)
+          showToast(biometry.isEnabled && !nextBiometry.isEnabled
+            ? 'Mot de passe modifié. Réactivez la biométrie.'
+            : 'Mot de passe maître modifié.')
           break
+        }
         case 'check-update': {
           setUpdateStatus('Recherche en cours…')
           const update = await tauri.updater.check()
@@ -510,6 +651,40 @@ export function App() {
         case 'export': setBackupDialog({ mode: 'export' }); break
         case 'import': importInputRef.current?.click(); break
         case 'browser-import': browserImportInputRef.current?.click(); break
+        case 'set-autofill-enabled': {
+          const status = await tauri.invoke('set_autofill_enabled', { enabled: payload })
+          setAutofill(status)
+          showToast(payload ? 'Remplissage automatique activé.' : 'Remplissage automatique désactivé.')
+          break
+        }
+        case 'set-system-lock': {
+          const status = await tauri.invoke('definir_verrouillage_systeme', { onSessionLock: payload.onSessionLock, onSleep: payload.onSleep })
+          setSystemLock({ ...defaultSystemLock, ...status })
+          showToast('Verrouillage automatique mis à jour.')
+          break
+        }
+        case 'set-screen-protection': {
+          const status = await tauri.invoke('definir_protection_ecran', { enabled: payload })
+          setScreenProtection({ ...defaultScreenProtection, ...status })
+          showToast(payload ? 'Clave est masqué des captures d’écran.' : 'Clave est de nouveau visible dans les captures d’écran.')
+          break
+        }
+        case 'create-recovery-kit': {
+          const key = await tauri.invoke('creer_cle_recuperation', { password: payload })
+          setRecoveryKit({ key, mode: recoveryAvailable ? 'regenerated' : 'setup' })
+          setRecoveryAvailable(true)
+          return true
+        }
+        case 'copy-autofill-token':
+          await tauri.clipboard.writeText(autofill.token)
+          showToast('Code d’appairage copié.')
+          break
+        case 'rotate-autofill-token': {
+          const status = await tauri.invoke('rotate_autofill_token')
+          setAutofill(status)
+          showToast('Nouveau code créé. Reconnectez l’extension.')
+          break
+        }
         default: break
       }
     } catch (cause) {
@@ -572,7 +747,7 @@ export function App() {
       }
       setImportPreview(detectedEntries)
     } catch (cause) {
-      showToast(errorMessage(cause, 'Import impossible. Vérifiez le fichier exporté depuis votre navigateur.'))
+      showToast(errorMessage(cause, 'Import impossible. Vérifiez le fichier exporté depuis votre navigateur ou gestionnaire.'))
     }
   }
 
@@ -599,13 +774,18 @@ export function App() {
         const session = sessionGeneration.current
         dispatch({ type: 'set-view', view: payload })
         if (payload === 'history' || payload === 'trash') {
+          const request = ++activityRequestGeneration.current[payload]
           try {
             const command = payload === 'history' ? 'charger_historique' : 'charger_corbeille'
             const items = await tauri.invoke(command)
-            if (isCurrentSession(session)) setActivityItems(items)
+            if (isCurrentSession(session) && request === activityRequestGeneration.current[payload]) {
+              setActivityItems((current) => ({ ...current, [payload]: items }))
+            }
           } catch (cause) {
-            setActivityItems([])
-            showToast(errorMessage(cause))
+            if (isCurrentSession(session) && request === activityRequestGeneration.current[payload]) {
+              setActivityItems((current) => ({ ...current, [payload]: [] }))
+              showToast(errorMessage(cause))
+            }
           }
         }
         break
@@ -616,8 +796,21 @@ export function App() {
         break
       }
       case 'edit-entry': setDrawer({ category: payload.category, index: payload.index, entry: payload }); break
-      case 'entry-menu': setEntryMenu({ target: payload.entry, position: { x: Math.min(payload.event.clientX, window.innerWidth - 230), y: Math.min(payload.event.clientY, window.innerHeight - 180) } }); break
-      case 'category-menu': setCategoryMenu({ target: payload.category, position: { x: Math.min(payload.event.clientX, window.innerWidth - 230), y: Math.min(payload.event.clientY, window.innerHeight - 120) } }); break
+      case 'change-password-on-site': {
+        try {
+          const url = await tauri.invoke('url_changement_mot_de_passe', { site: payload.site })
+          await tauri.openUrl(url)
+          setDrawer({ category: payload.category, index: payload.index, entry: payload })
+          showToast(url.includes('/.well-known/change-password')
+            ? 'Page de changement ouverte. Générez un nouveau mot de passe ici, puis enregistrez-le.'
+            : 'Ce site ne publie pas de page de changement : sa page d’accueil a été ouverte.')
+        } catch (cause) {
+          showToast(errorMessage(cause, 'Le site n’a pas pu être ouvert.'))
+        }
+        break
+      }
+      case 'entry-menu': setEntryMenu({ target: payload.entry, returnFocus: payload.event.currentTarget, position: { x: payload.event.clientX, y: payload.event.clientY } }); break
+      case 'category-menu': setCategoryMenu({ target: payload.category, returnFocus: payload.event.currentTarget.querySelector('button'), position: { x: payload.event.clientX, y: payload.event.clientY } }); break
       case 'rename-category': setCategoryDialog({ type: 'rename', category: payload.category, value: payload.category }); break
       case 'favorite': await toggleFavorite(payload); break
       case 'totp': {
@@ -639,7 +832,7 @@ export function App() {
         dispatch({ type: 'load', categories: result })
         const items = await tauri.invoke('charger_historique')
         if (!isCurrentSession(session)) break
-        setActivityItems(items)
+        setActivityItems((current) => ({ ...current, history: items }))
         showToast('Version restaurée.')
         break
       }
@@ -650,8 +843,25 @@ export function App() {
         dispatch({ type: 'load', categories: result })
         const items = await tauri.invoke('charger_corbeille')
         if (!isCurrentSession(session)) break
-        setActivityItems(items)
+        setActivityItems((current) => ({ ...current, trash: items }))
         showToast('Accès restauré.')
+        break
+      }
+      case 'merge-duplicates': {
+        const session = sessionGeneration.current
+        try {
+          const result = await tauri.invoke('fusionner_doublons', {
+            categorieGardee: payload.keep.category,
+            indexGarde: payload.keep.index,
+            categorieRetiree: payload.drop.category,
+            indexRetire: payload.drop.index,
+          })
+          if (!isCurrentSession(session)) break
+          dispatch({ type: 'load', categories: result })
+          showToast('Doublons fusionnés. L’autre entrée est dans la corbeille.')
+        } catch (cause) {
+          showToast(errorMessage(cause, 'La fusion a échoué.'))
+        }
         break
       }
       case 'delete-trash': {
@@ -660,7 +870,7 @@ export function App() {
         if (!isCurrentSession(session)) break
         const items = await tauri.invoke('charger_corbeille')
         if (!isCurrentSession(session)) break
-        setActivityItems(items)
+        setActivityItems((current) => ({ ...current, trash: items }))
         showToast('Accès supprimé définitivement.')
         break
       }
@@ -668,7 +878,7 @@ export function App() {
         const session = sessionGeneration.current
         await tauri.invoke('vider_corbeille')
         if (!isCurrentSession(session)) break
-        setActivityItems([])
+        setActivityItems((current) => ({ ...current, trash: [] }))
         showToast('Poubelle vidée.')
         break
       }
@@ -679,7 +889,44 @@ export function App() {
     }
   }
 
+  async function handleCommandAction(action, entry) {
+    if (!entry) return
+    if (action === 'edit') {
+      dispatch({ type: 'select-category', category: entry.category })
+      setDrawer({ category: entry.category, index: entry.index, entry })
+      setCommandOpen(false)
+      tauri.invoke('marquer_consulte', { categorie: entry.category, index: entry.index }).catch(() => {})
+      return
+    }
+    if (action === 'copy-password') {
+      setCommandOpen(false)
+      await copySecure(entry.mdp, 'Mot de passe copié.')
+      return
+    }
+    if (action === 'copy-email') {
+      setCommandOpen(false)
+      await copySecure(entry.email, 'Identifiant copié.')
+      return
+    }
+    if (action === 'totp') {
+      setCommandOpen(false)
+      await handleVaultAction('totp', entry)
+      return
+    }
+    if (action === 'open-site') {
+      const site = normalizeSiteUrl(entry.site) || entry.site
+      if (site) {
+        window.open(site, '_blank', 'noopener,noreferrer')
+        setCommandOpen(false)
+        tauri.invoke('marquer_consulte', { categorie: entry.category, index: entry.index }).catch(() => {})
+      }
+    }
+  }
+
+  const stableVaultAction = useEventCallback(handleVaultAction)
   const menuTarget = entryMenu?.target
+  const commandEntries = useMemo(() => allEntries(vault.categories), [vault.categories])
+
 
   return (
     <div className="clave-app" data-testid="clave-app" data-theme={preferences.darkMode ? 'dark' : 'light'}>
@@ -689,12 +936,14 @@ export function App() {
           <LockScreen
             key="lock"
             configured={configured}
+            recoveryAvailable={recoveryAvailable}
             biometry={biometry}
             biometricState={biometricState}
             busy={busy}
             error={error}
             onPassword={authenticateWithPassword}
             onBiometry={authenticateWithBiometry}
+            onRecover={recoverWithKey}
           />
         )}
         {phase === 'unlocked' && (
@@ -702,26 +951,35 @@ export function App() {
             <AnimatePresence mode="wait" initial={false}>
               {screen === 'vault' ? (
                 <motion.div key="vault-screen" {...motionProps(reduced)}>
-                  <VaultWorkspace state={vault} activityItems={activityItems} showToolbarLock={preferences.showToolbarLock} onAction={handleVaultAction} />
+                  <Suspense fallback={null}>
+                    <VaultWorkspace state={vault} activityItems={activityItems[vault.view] || emptyActivityItems} showToolbarLock={preferences.showToolbarLock} onAction={stableVaultAction} />
+                  </Suspense>
                 </motion.div>
               ) : (
-                <SettingsView
-                  key="settings-screen"
-                  preferences={preferences}
-                  biometry={biometry}
-                  version={version}
-                  updateStatus={updateStatus}
-                  updateAvailable={Boolean(pendingUpdate)}
-                  onClose={() => setScreen('vault')}
-                  onPreference={updatePreference}
-                  onAction={handleSettingsAction}
-                />
+                <Suspense key="settings-screen" fallback={null}>
+                  <SettingsView
+                    initialSection={settingsSection}
+                    preferences={preferences}
+                    biometry={biometry}
+                    version={version}
+                    updateStatus={updateStatus}
+                    updateAvailable={Boolean(pendingUpdate)}
+                    autofill={autofill}
+                    systemLock={systemLock}
+                    screenProtection={screenProtection}
+                    recoveryConfigured={recoveryAvailable}
+                    onClose={() => setScreen('vault')}
+                    onPreference={updatePreference}
+                    onAction={handleSettingsAction}
+                  />
+                </Suspense>
               )}
             </AnimatePresence>
           </motion.div>
         )}
       </AnimatePresence>
 
+      <Suspense fallback={null}>
       <EntryDrawer
         open={Boolean(drawer)}
         entry={drawer?.entry}
@@ -732,14 +990,19 @@ export function App() {
       <EntryContextMenu
         target={menuTarget}
         position={entryMenu?.position || { x: 0, y: 0 }}
+        returnFocus={entryMenu?.returnFocus}
+        onClose={() => setEntryMenu(null)}
         onEdit={() => { setDrawer({ category: menuTarget.category, index: menuTarget.index, entry: menuTarget }); setEntryMenu(null) }}
         onCopyPassword={() => { copySecure(menuTarget.mdp, 'Mot de passe copié.'); setEntryMenu(null) }}
         onCopyEmail={() => { copySecure(menuTarget.email, 'Identifiant copié.'); setEntryMenu(null) }}
+        onShare={() => { setShareTarget(menuTarget); setEntryMenu(null) }}
         onDelete={() => deleteEntry(menuTarget)}
       />
       <CategoryContextMenu
         target={categoryMenu?.target}
         position={categoryMenu?.position || { x: 0, y: 0 }}
+        returnFocus={categoryMenu?.returnFocus}
+        onClose={() => setCategoryMenu(null)}
         onRename={() => { setCategoryDialog({ type: 'rename', category: categoryMenu.target, value: categoryMenu.target }); setCategoryMenu(null) }}
         onDelete={() => { setCategoryDialog({ type: 'delete', category: categoryMenu.target }); setCategoryMenu(null) }}
       />
@@ -762,19 +1025,26 @@ export function App() {
       />
       <BackupDialog state={backupDialog} onClose={() => setBackupDialog(null)} onConfirm={confirmBackup} />
       <ImportPreviewDialog entries={importPreview} onClose={() => setImportPreview([])} onConfirm={confirmBrowserImport} />
+      <ShareDialog
+        target={shareTarget}
+        server={preferences.shareServer}
+        onShare={shareEntry}
+        onCopy={(url) => copySecure(url, 'Lien de partage copié.')}
+        onConfigure={() => { setShareTarget(null); openSettings('sharing') }}
+        onClose={() => setShareTarget(null)}
+      />
+      <RecoveryKitDialog kit={recoveryKit} onCopy={(key) => copySecure(key, 'Clé de récupération copiée.')} onFeedback={showToast} onClose={() => setRecoveryKit(null)} />
+      </Suspense>
       <input ref={importInputRef} id="import-file" className="sr-only" type="file" accept="application/json,.json" onChange={onBackupFile} tabIndex="-1" />
-      <input ref={browserImportInputRef} id="browser-import-file" className="sr-only" type="file" accept="text/csv,text/plain,.csv,.tsv,.txt" onChange={onBrowserImportFile} tabIndex="-1" />
+      <input ref={browserImportInputRef} id="browser-import-file" className="sr-only" type="file" accept="text/csv,text/plain,application/json,application/xml,text/xml,.csv,.tsv,.txt,.json,.xml" onChange={onBrowserImportFile} tabIndex="-1" />
+      <Suspense fallback={null}>
       <CommandPalette
         open={commandOpen}
-        entries={allEntries(vault.categories)}
+        entries={commandEntries}
         onClose={() => setCommandOpen(false)}
-        onSelect={(entry) => {
-          dispatch({ type: 'select-category', category: entry.category })
-          setDrawer({ category: entry.category, index: entry.index, entry })
-          setCommandOpen(false)
-          tauri.invoke('marquer_consulte', { categorie: entry.category, index: entry.index }).catch(() => {})
-        }}
+        onAction={handleCommandAction}
       />
+      </Suspense>
       <Toast message={toast} />
     </div>
   )
