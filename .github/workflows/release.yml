@@ -34,6 +34,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Check release tag matches app version
+        if: github.event_name == 'release'
+        shell: bash
+        run: |
+          app_version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          tag="${{ github.event.release.tag_name }}"
+          tag_version=$(echo "$tag" | sed -E 's/^[vV]\.?//')
+          if [ "$tag_version" != "$app_version" ]; then
+            echo "::error::Le tag $tag ne correspond pas à la version de l'app ($app_version). Mettez à jour package.json, Cargo.toml et tauri.conf.json avant de publier."
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - run: npm run icons
@@ -44,6 +55,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          releaseId: ${{ github.event.release.id }}
           tagName: v__VERSION__
           releaseName: Clave v__VERSION__
           releaseBody: Consultez les notes de version pour connaitre les changements.
@@ -61,7 +73,17 @@ jobs:
       - name: Check latest.json is published
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --location \
-            "https://github.com/Sch0606/app-mdp/releases/latest/download/latest.json" \
-            | tee latest.json
+          if [ "${{ github.event_name }}" = "release" ]; then
+            url="https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/latest.json"
+          else
+            url="https://github.com/${{ github.repository }}/releases/latest/download/latest.json"
+          fi
+          for attempt in 1 2 3 4 5; do
+            if curl --fail --silent --show-error --location "$url" -o latest.json; then
+              break
+            fi
+            [ "$attempt" = 5 ] && exit 1
+            sleep 10
+          done
+          cat latest.json
           grep -q '"version"' latest.json
