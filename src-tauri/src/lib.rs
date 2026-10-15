@@ -5,10 +5,12 @@ mod breach;
 mod importers;
 #[cfg(target_os = "macos")]
 mod macos_biometry;
+mod safe_fetch;
 mod screen_protection;
 mod share;
 mod store;
 mod system_lock;
+mod two_factor;
 
 use std::{
     collections::HashMap,
@@ -26,7 +28,6 @@ use system_lock::{SystemLockConfig, SystemLockRuntime, SystemLockStatus};
 const BROWSER_EXTENSION_ENABLED: bool = true;
 use hmac::{Hmac, Mac};
 use reqwest::blocking::Client;
-use reqwest::header::CONTENT_TYPE;
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use store::{ActivityRecord, AuthStatus, CategoryMap, PasswordEntry, PasswordStore, TrashRecord};
@@ -86,6 +87,8 @@ struct SiteIcon {
 }
 
 const ICON_MAX_BYTES: usize = 160 * 1024;
+// Certains sites refusent les clients non navigateurs (403 ou page vide).
+const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
 const ICON_CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 static ICON_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
@@ -99,7 +102,24 @@ fn biometry_data_options() -> DataOptions {
 
 #[cfg(not(target_os = "macos"))]
 fn biometry_type_label(status: &BiometryStatus) -> String {
+    // Le plugin renvoie « Auto » sous Windows : l'interface attend « WindowsHello ».
+    if cfg!(target_os = "windows") && status.is_available {
+        return "WindowsHello".to_string();
+    }
     format!("{:?}", status.biometry_type)
+}
+
+/// Les invites Windows Hello bloquent jusqu'à la réponse de l'utilisateur : elles ne
+/// doivent pas tourner sur le thread principal, sinon la fenêtre se fige.
+#[cfg(not(target_os = "macos"))]
+async fn run_biometry<T, F>(task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|_| "L’authentification biométrique a été interrompue.".to_string())?
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -129,8 +149,8 @@ fn auth_status(state: State<AppState>) -> Result<AuthStatus, String> {
 
 #[tauri::command]
 #[cfg(not(target_os = "macos"))]
-fn biometrie_status(app: AppHandle) -> Result<BiometryUiStatus, String> {
-    map_biometry_status(&app)
+async fn biometrie_status(app: AppHandle) -> Result<BiometryUiStatus, String> {
+    run_biometry(move || map_biometry_status(&app)).await
 }
 
 #[tauri::command]
@@ -141,9 +161,9 @@ fn biometrie_status() -> Result<BiometryUiStatus, String> {
 
 #[tauri::command]
 #[cfg(not(target_os = "macos"))]
-fn activer_biometrie(
+async fn activer_biometrie(
     app: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
     password: String,
 ) -> Result<BiometryUiStatus, String> {
     if password.trim().len() < 8 {
@@ -160,22 +180,25 @@ fn activer_biometrie(
             .map_err(|error| error.to_string())?;
     }
 
-    let status = app.biometry().status().map_err(|error| error.to_string())?;
-    if !status.is_available {
-        return Err(status
-            .error
-            .unwrap_or_else(|| "Biometrie indisponible sur cet appareil.".to_string()));
-    }
+    run_biometry(move || {
+        let status = app.biometry().status().map_err(|error| error.to_string())?;
+        if !status.is_available {
+            return Err(status
+                .error
+                .unwrap_or_else(|| "Biometrie indisponible sur cet appareil.".to_string()));
+        }
 
-    app.biometry()
-        .set_data(SetDataOptions {
-            domain: BIOMETRY_DOMAIN.to_string(),
-            name: BIOMETRY_MASTER_PASSWORD_NAME.to_string(),
-            data: password,
-        })
-        .map_err(|error| error.to_string())?;
+        app.biometry()
+            .set_data(SetDataOptions {
+                domain: BIOMETRY_DOMAIN.to_string(),
+                name: BIOMETRY_MASTER_PASSWORD_NAME.to_string(),
+                data: password,
+            })
+            .map_err(|error| error.to_string())?;
 
-    map_biometry_status(&app)
+        map_biometry_status(&app)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -197,11 +220,14 @@ fn activer_biometrie(state: State<AppState>, password: String) -> Result<Biometr
 
 #[tauri::command]
 #[cfg(not(target_os = "macos"))]
-fn desactiver_biometrie(app: AppHandle) -> Result<BiometryUiStatus, String> {
-    app.biometry()
-        .remove_data(biometry_data_options())
-        .map_err(|error| error.to_string())?;
-    map_biometry_status(&app)
+async fn desactiver_biometrie(app: AppHandle) -> Result<BiometryUiStatus, String> {
+    run_biometry(move || {
+        app.biometry()
+            .remove_data(biometry_data_options())
+            .map_err(|error| error.to_string())?;
+        map_biometry_status(&app)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -212,16 +238,21 @@ fn desactiver_biometrie() -> Result<BiometryUiStatus, String> {
 
 #[tauri::command]
 #[cfg(not(target_os = "macos"))]
-fn deverrouiller_biometrie(app: AppHandle, state: State<AppState>) -> Result<AuthStatus, String> {
-    let data = app
-        .biometry()
-        .get_data(GetDataOptions {
-            domain: BIOMETRY_DOMAIN.to_string(),
-            name: BIOMETRY_MASTER_PASSWORD_NAME.to_string(),
-            reason: "Deverrouiller Clave".to_string(),
-            cancel_title: Some("Annuler".to_string()),
-        })
-        .map_err(|error| error.to_string())?;
+async fn deverrouiller_biometrie(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AuthStatus, String> {
+    let data = run_biometry(move || {
+        app.biometry()
+            .get_data(GetDataOptions {
+                domain: BIOMETRY_DOMAIN.to_string(),
+                name: BIOMETRY_MASTER_PASSWORD_NAME.to_string(),
+                reason: "Deverrouiller Clave".to_string(),
+                cancel_title: Some("Annuler".to_string()),
+            })
+            .map_err(|error| error.to_string())
+    })
+    .await?;
 
     let mut store = state
         .store
@@ -321,6 +352,16 @@ async fn verifier_fuites(state: State<'_, AppState>) -> Result<breach::BreachRep
     })
     .await
     .map_err(|_| "La vérification a été interrompue.".to_string())?
+}
+
+/// Domaines dont le service propose un code 2FA (TOTP), pour ne recommander
+/// la 2FA que là où elle existe.
+#[tauri::command]
+async fn domaines_2fa(app: AppHandle) -> Result<Vec<String>, String> {
+    let cache_dir = app.path().app_data_dir().ok();
+    tauri::async_runtime::spawn_blocking(move || two_factor::supported_domains(cache_dir))
+        .await
+        .map_err(|_| "La lecture de l’annuaire 2FA a été interrompue.".to_string())?
 }
 
 #[tauri::command]
@@ -445,6 +486,7 @@ fn unlock(state: State<AppState>, password: String) -> Result<AuthStatus, String
 
 #[tauri::command]
 fn changer_mot_de_passe_maitre(
+    app: AppHandle,
     state: State<AppState>,
     ancien_password: String,
     nouveau_password: String,
@@ -466,9 +508,16 @@ fn changer_mot_de_passe_maitre(
     drop(store);
 
     #[cfg(target_os = "macos")]
-    if touch_id_was_enabled && macos_biometry::store_password(&touch_id_password).is_err() {
-        let _ = macos_biometry::remove_password();
+    {
+        let _ = app;
+        if touch_id_was_enabled && macos_biometry::store_password(&touch_id_password).is_err() {
+            let _ = macos_biometry::remove_password();
+        }
     }
+    // Windows Hello conserverait l'ancien mot de passe (le réenregistrer exigerait une
+    // nouvelle invite) : on le retire, l'interface propose alors de le réactiver.
+    #[cfg(not(target_os = "macos"))]
+    let _ = app.biometry().remove_data(biometry_data_options());
 
     Ok(auth_status)
 }
@@ -796,8 +845,10 @@ fn normalize_site_input(site: &str) -> Result<String, String> {
     Ok(url.to_string().trim_end_matches('/').to_string())
 }
 
+// Asynchrone : la résolution enchaîne plusieurs requêtes réseau et ne doit
+// pas bloquer le thread principal (la saisie du site gelait l'interface).
 #[tauri::command]
-fn resoudre_icone_site(
+async fn resoudre_icone_site(
     app: AppHandle,
     site: String,
     service: Option<String>,
@@ -807,7 +858,11 @@ fn resoudre_icone_site(
         .app_data_dir()
         .ok()
         .map(|directory| directory.join("favicon-cache"));
-    resolve_site_icon_with_cache(&site, service.as_deref().unwrap_or_default(), cache_dir)
+    tauri::async_runtime::spawn_blocking(move || {
+        resolve_site_icon_with_cache(&site, service.as_deref().unwrap_or_default(), cache_dir)
+    })
+    .await
+    .map_err(|_| "La recherche de l’icône a été interrompue.".to_string())?
 }
 
 fn resolve_site_icon_with_cache(
@@ -831,10 +886,24 @@ fn resolve_site_icon_with_cache(
     let origin = url.origin().ascii_serialization();
 
     let fallback_label = fallback_label(origin.as_str());
-    let mut candidates = brand_icon_urls(service, url.host_str().unwrap_or_default());
-    candidates.extend(discover_page_icon_urls(&origin));
+    let host = url.host_str().unwrap_or_default();
+    // Icônes déclarées par le site d'abord (fidèles et lisibles en mode sombre),
+    // puis /favicon.ico, le service d'icônes DuckDuckGo et enfin Simple Icons
+    // pour retrouver une marque quand l'hôte est mal saisi.
+    let (page_origin, page_icons) = discover_page_icon_urls(&origin);
+    let mut candidates = page_icons;
     candidates.push(format!("{origin}/favicon.ico"));
-    candidates.dedup();
+    candidates.push(format!("{page_origin}/favicon.ico"));
+    let icon_host = Url::parse(&page_origin)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .unwrap_or_else(|| host.to_string());
+    if icon_host.contains('.') {
+        candidates.push(format!("https://icons.duckduckgo.com/ip3/{icon_host}.ico"));
+    }
+    candidates.extend(brand_icon_urls(service, host));
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|candidate| seen.insert(candidate.clone()));
 
     let mut icon_url = String::new();
     let mut source = "fallback";
@@ -950,29 +1019,43 @@ fn extract_page_icon_urls(html: &str, origin: &str) -> Vec<String> {
     icons
 }
 
-fn discover_page_icon_urls(origin: &str) -> Vec<String> {
-    let client = match Client::builder()
-        .timeout(Duration::from_millis(1800))
-        .user_agent("Mozilla/5.0 Clave/0.3.1")
-        .build()
-    {
-        Ok(client) => client,
-        Err(_) => return Vec::new(),
+/// Télécharge la page d'accueil (redirections suivies) et renvoie l'origine
+/// finale ainsi que les icônes déclarées, les `apple-touch-icon` en premier.
+fn discover_page_icon_urls(origin: &str) -> (String, Vec<String>) {
+    let fallback = (origin.to_string(), Vec::new());
+    // Les balises <link> sont dans le <head> : inutile de lire toute la page.
+    let Ok(page) = safe_fetch::safe_get(
+        origin,
+        "text/html,application/xhtml+xml",
+        BROWSER_USER_AGENT,
+        512 * 1024,
+    ) else {
+        return fallback;
     };
-    let Ok(response) = client.get(origin).send() else {
-        return Vec::new();
-    };
-    if !response.status().is_success() {
-        return Vec::new();
+    let final_origin = page.final_url.origin().ascii_serialization();
+    let html = String::from_utf8_lossy(&page.bytes);
+    let mut icons = extract_page_icon_urls(&html, page.final_url.as_str());
+    icons.sort_by_key(|icon| !icon.contains("apple-touch"));
+    (final_origin, icons)
+}
+
+/// Type d'image deviné depuis les premiers octets, pour les serveurs qui
+/// servent un favicon en `application/octet-stream` ou `text/plain`.
+fn sniff_image_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("image/png")
+    } else if bytes.starts_with(&[0, 0, 1, 0]) {
+        Some("image/x-icon")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF8") {
+        Some("image/gif")
+    } else if bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        let start = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]).to_ascii_lowercase();
+        start.contains("<svg").then_some("image/svg+xml")
     }
-    let Ok(bytes) = response.bytes() else {
-        return Vec::new();
-    };
-    if bytes.is_empty() || bytes.len() > 512 * 1024 {
-        return Vec::new();
-    }
-    let html = String::from_utf8_lossy(bytes.as_ref());
-    extract_page_icon_urls(&html, origin)
 }
 
 fn cached_icon_data_url(url: &str, cache_dir: Option<PathBuf>) -> String {
@@ -1044,32 +1127,32 @@ fn write_cached_icon(cache_dir: &std::path::Path, url: &str, icon_url: &str) {
 }
 
 fn fetch_icon_data_url(url: &str) -> Option<String> {
-    let client = Client::builder()
-        .timeout(Duration::from_millis(1800))
-        .user_agent("Clave/0.3.1")
-        .build()
-        .ok()?;
-    let response = client.get(url).send().ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    let content_type = response
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("image/x-icon")
+    let resource = safe_fetch::safe_get(
+        url,
+        "image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8",
+        BROWSER_USER_AGENT,
+        ICON_MAX_BYTES,
+    )
+    .ok()?;
+    let declared_type = resource
+        .content_type
         .split(';')
         .next()
-        .unwrap_or("image/x-icon")
+        .unwrap_or_default()
         .trim()
-        .to_string();
-    if !content_type.starts_with("image/") {
+        .to_ascii_lowercase();
+    let bytes = resource.bytes;
+    if bytes.is_empty() {
         return None;
     }
-    let bytes = response.bytes().ok()?;
-    if bytes.is_empty() || bytes.len() > ICON_MAX_BYTES {
-        return None;
-    }
+    // Les octets font foi : une page HTML d'erreur servie en 200 est écartée.
+    let content_type = match sniff_image_type(bytes.as_ref()) {
+        Some(sniffed) => sniffed.to_string(),
+        None if declared_type.starts_with("image/") && declared_type != "image/svg+xml" => {
+            declared_type
+        }
+        None => return None,
+    };
     icon_data_url(&content_type, bytes.as_ref())
 }
 
@@ -1187,7 +1270,8 @@ mod tests {
     use super::{
         brand_icon_urls, extract_page_icon_urls, icon_data_url, normalize_site_input,
         normalize_totp_secret, read_cached_icon, resolve_change_password_url,
-        resolve_site_icon_with_cache, should_keep_running_after_close, write_cached_icon,
+        resolve_site_icon_with_cache, should_keep_running_after_close, sniff_image_type,
+        write_cached_icon,
     };
 
     #[test]
@@ -1286,6 +1370,17 @@ mod tests {
     }
 
     #[test]
+    fn favicons_served_with_a_generic_type_are_recognised() {
+        assert_eq!(sniff_image_type(&[0, 0, 1, 0, 1]), Some("image/x-icon"));
+        assert_eq!(sniff_image_type(b"\x89PNG\r\n"), Some("image/png"));
+        assert_eq!(
+            sniff_image_type(br#"<?xml version="1.0"?><svg></svg>"#),
+            Some("image/svg+xml")
+        );
+        assert_eq!(sniff_image_type(b"<!doctype html>"), None);
+    }
+
+    #[test]
     fn favicon_cache_persists_data_urls_on_disk() {
         let directory = tempfile::tempdir().unwrap();
         let url = "https://aternos.org/favicon.ico";
@@ -1340,14 +1435,103 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+/// Barre de menus macOS en français, avec « Réglages… » (⌘,) comme dans les apps natives.
+/// Le menu Édition est indispensable : sans lui, ⌘C / ⌘V / ⌘A ne marchent pas dans la vue web.
+#[cfg(target_os = "macos")]
+fn macos_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    use tauri::menu::{AboutMetadata, PredefinedMenuItem, Submenu};
+
+    let about = AboutMetadata {
+        name: Some("Clave".into()),
+        version: Some(app.package_info().version.to_string()),
+        ..Default::default()
+    };
+    let settings = MenuItem::with_id(app, "settings", "Réglages…", true, Some("Cmd+,"))?;
+    let lock = MenuItem::with_id(app, "lock", "Verrouiller le coffre", true, Some("Cmd+Shift+L"))?;
+    let search = MenuItem::with_id(app, "search", "Rechercher…", true, Some("Cmd+K"))?;
+
+    let app_menu = Submenu::with_items(
+        app,
+        "Clave",
+        true,
+        &[
+            &PredefinedMenuItem::about(app, Some("À propos de Clave"), Some(about))?,
+            &PredefinedMenuItem::separator(app)?,
+            &settings,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, Some("Services"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, Some("Masquer Clave"))?,
+            &PredefinedMenuItem::hide_others(app, Some("Masquer les autres"))?,
+            &PredefinedMenuItem::show_all(app, Some("Tout afficher"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::quit(app, Some("Quitter Clave"))?,
+        ],
+    )?;
+    let vault_menu = Submenu::with_items(app, "Coffre", true, &[&search, &lock])?;
+    let edit_menu = Submenu::with_items(
+        app,
+        "Édition",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, Some("Annuler"))?,
+            &PredefinedMenuItem::redo(app, Some("Rétablir"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, Some("Couper"))?,
+            &PredefinedMenuItem::copy(app, Some("Copier"))?,
+            &PredefinedMenuItem::paste(app, Some("Coller"))?,
+            &PredefinedMenuItem::select_all(app, Some("Tout sélectionner"))?,
+        ],
+    )?;
+    let view_menu = Submenu::with_items(
+        app,
+        "Présentation",
+        true,
+        &[&PredefinedMenuItem::fullscreen(app, Some("Plein écran"))?],
+    )?;
+    let window_menu = Submenu::with_items(
+        app,
+        "Fenêtre",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, Some("Réduire"))?,
+            &PredefinedMenuItem::maximize(app, Some("Zoom"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::close_window(app, Some("Fermer la fenêtre"))?,
+        ],
+    )?;
+    Menu::with_items(
+        app,
+        &[&app_menu, &vault_menu, &edit_menu, &view_menu, &window_menu],
+    )
+}
+
 pub fn run() {
     let builder = tauri::Builder::default()
+        // Doit être enregistré en premier : un second lancement (raccourci, menu Démarrer)
+        // réaffiche la fenêtre existante au lieu de démarrer un autre processus qui se
+        // disputerait le coffre, le port de remplissage automatique et l'icône de zone
+        // de notification.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
     #[cfg(not(target_os = "macos"))]
     let builder = builder.plugin(tauri_plugin_biometry::init());
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .menu(macos_menu)
+        .on_menu_event(|app, event| {
+            let action = event.id.as_ref();
+            if matches!(action, "settings" | "lock" | "search") {
+                use tauri::Emitter;
+                show_main_window(app);
+                let _ = app.emit("menu-action", action);
+            }
+        });
 
     builder
         .setup(|app| {
@@ -1391,7 +1575,8 @@ pub fn run() {
             let mut tray = TrayIconBuilder::new()
                 .tooltip("Clave — coffre local")
                 .menu(&menu)
-                .show_menu_on_left_click(false)
+                // macOS : un clic dans la barre des menus ouvre le menu, comme partout ailleurs.
+                .show_menu_on_left_click(cfg!(target_os = "macos"))
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => show_main_window(app),
                     "quit" => app.exit(0),
@@ -1407,6 +1592,17 @@ pub fn run() {
                         show_main_window(tray.app_handle());
                     }
                 });
+            // macOS : icône monochrome « template », que le système teinte selon le thème
+            // de la barre des menus (l'icône couleur de l'app y paraît comme une tache).
+            #[cfg(target_os = "macos")]
+            {
+                tray = tray
+                    .icon(tauri::image::Image::from_bytes(include_bytes!(
+                        "../icons/tray-template.png"
+                    ))?)
+                    .icon_as_template(true);
+            }
+            #[cfg(not(target_os = "macos"))]
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
@@ -1462,6 +1658,7 @@ pub fn run() {
             set_autofill_enabled,
             rotate_autofill_token,
             verifier_fuites,
+            domaines_2fa,
             partager_acces,
             verrouillage_systeme_status,
             definir_verrouillage_systeme,
@@ -1469,6 +1666,14 @@ pub fn run() {
             definir_protection_ecran,
             url_changement_mot_de_passe
         ])
-        .run(tauri::generate_context!())
-        .expect("erreur pendant l'execution de Clave");
+        .build(tauri::generate_context!())
+        .expect("erreur pendant l'execution de Clave")
+        .run(|_app, _event| {
+            // macOS : la fenêtre fermée n'est que masquée ; un clic sur l'icône du Dock
+            // doit la faire réapparaître.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = _event {
+                show_main_window(_app);
+            }
+        });
 }

@@ -2,6 +2,10 @@
 //
 // Le serveur ne voit jamais la clé : elle reste dans le fragment (#…) du lien, que les
 // navigateurs n'envoient pas. Il ne conserve qu'un texte chiffré opaque, en mémoire.
+//
+// Limite : la page /s/<id> et viewer.js sont servis par ce même serveur. Un serveur
+// compromis pourrait les modifier pour lire le fragment et exfiltrer la clé. Cette page
+// ne protège donc que contre un serveur passif ; voir offline/dechiffreur-clave.html.
 
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
@@ -171,10 +175,14 @@ export function createShareServer({
 
       const reveal = pathname.match(/^\/api\/secrets\/([^/]+)\/reveal$/)
       if (request.method === 'POST' && reveal) {
-        if (!revealLimiter.allow(address)) return send(response, 429, { error: 'Trop de tentatives. Réessayez plus tard.' })
+        // Ouvert à toute origine : le déchiffreur hors ligne (offline/dechiffreur-clave.html),
+        // indépendant de ce serveur, doit pouvoir récupérer le texte chiffré. La réponse ne
+        // contient rien d’exploitable sans la clé, qui reste dans le fragment du lien.
+        const cors = { 'Access-Control-Allow-Origin': '*' }
+        if (!revealLimiter.allow(address)) return send(response, 429, { error: 'Trop de tentatives. Réessayez plus tard.' }, cors)
         const ciphertext = ID_PATTERN.test(reveal[1]) ? store.take(reveal[1]) : null
-        if (!ciphertext) return send(response, 404, { error: 'Ce lien a déjà été consulté ou a expiré.' })
-        return send(response, 200, { ciphertext })
+        if (!ciphertext) return send(response, 404, { error: 'Ce lien a déjà été consulté ou a expiré.' }, cors)
+        return send(response, 200, { ciphertext }, cors)
       }
 
       if (request.method === 'GET' || request.method === 'HEAD') {

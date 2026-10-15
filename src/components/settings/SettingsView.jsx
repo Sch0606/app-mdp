@@ -3,6 +3,7 @@ import { ArrowLeft, BookOpen, CloudDownload, Copy, Download, Fingerprint, FileTe
 import { useState } from 'react'
 import { motionProps, spring } from '../../motion/presets.js'
 import { DelaySelector } from './DelaySelector.jsx'
+import { displayHotkey, isMac } from '../../lib/hotkeys.js'
 
 const sections = [
   ['security', 'Sécurité', Shield],
@@ -69,7 +70,7 @@ export function SettingsView({ initialSection = 'security', preferences, biometr
   const [recoveryPassword, setRecoveryPassword] = useState('')
   const [shareServer, setShareServer] = useState(preferences.shareServer)
   const selectedIndex = sections.findIndex(([value]) => value === section)
-  const authMethod = /windows|hello/i.test(biometry.biometryType || '') ? 'Windows Hello' : 'Déverrouillage natif'
+  const authMethod = /windows|hello/i.test(biometry.biometryType || '') ? 'Windows Hello' : /touch.?id/i.test(biometry.biometryType || '') ? 'Touch ID' : 'Déverrouillage natif'
 
   async function submitPassword(event) {
     event.preventDefault()
@@ -137,11 +138,11 @@ export function SettingsView({ initialSection = 'security', preferences, biometr
                       <DelaySelector name="clipboard-clear-delay" className="clipboard-delay-options" value={preferences.clipboardDelay} options={clipboardOptions} onChange={(value) => onPreference('clipboardDelay', value)} />
                     </fieldset>
                     <label className="settings-switch">
-                      <span><strong>Au verrouillage de la session</strong><small>{systemLock.supported ? 'Fermer le coffre quand l’ordinateur est verrouillé (Win+L, écran de verrouillage)' : 'Non disponible sur ce système'}</small></span>
+                      <span><strong>Au verrouillage de la session</strong><small>{systemLock.supported ? `Fermer le coffre quand l’ordinateur est verrouillé (${isMac ? '⌃⌘Q' : 'Win+L'}, écran de verrouillage)` : 'Non disponible sur ce système'}</small></span>
                       <input id="toggle-lock-on-session" type="checkbox" checked={systemLock.onSessionLock} disabled={!systemLock.supported} onChange={(event) => onAction('set-system-lock', { ...systemLock, onSessionLock: event.target.checked })} />
                     </label>
                     <label className="settings-switch">
-                      <span><strong>À la mise en veille</strong><small>{systemLock.supported ? 'Fermer le coffre en cas de veille ou de fermeture du capot' : 'Non disponible sur ce système'}</small></span>
+                      <span><strong>À la mise en veille</strong><small>{systemLock.supported ? isMac ? 'Fermer le coffre en cas de veille, de mise en veille de l’écran ou de fermeture de l’écran' : 'Fermer le coffre en cas de veille ou de fermeture du capot' : 'Non disponible sur ce système'}</small></span>
                       <input id="toggle-lock-on-sleep" type="checkbox" checked={systemLock.onSleep} disabled={!systemLock.supported} onChange={(event) => onAction('set-system-lock', { ...systemLock, onSleep: event.target.checked })} />
                     </label>
                     <label className="settings-switch">
@@ -339,7 +340,7 @@ export function SettingsView({ initialSection = 'security', preferences, biometr
               {section === 'shortcuts' && (
                 <article className="settings-card settings-card-wide">
                   <div><p className="section-label">Raccourcis</p><h2>Verrouillage rapide</h2></div>
-                  <div className="shortcut-row"><span>Raccourci actuel</span><output id="lock-hotkey-display">{preferences.lockHotkey || 'Aucun'}</output><button className="secondary-button" id="record-lock-hotkey" type="button" onClick={() => onAction('record-hotkey')}>Définir</button><button className="text-button" id="clear-lock-hotkey" type="button" onClick={() => onPreference('lockHotkey', '')}>Retirer</button></div>
+                  <div className="shortcut-row"><span>Raccourci actuel</span><output id="lock-hotkey-display">{displayHotkey(preferences.lockHotkey) || 'Aucun'}</output><button className="secondary-button" id="record-lock-hotkey" type="button" onClick={() => onAction('record-hotkey')}>Définir</button><button className="text-button" id="clear-lock-hotkey" type="button" onClick={() => onPreference('lockHotkey', '')}>Retirer</button></div>
                 </article>
               )}
 

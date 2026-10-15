@@ -2,6 +2,8 @@ import { test, expect } from '@playwright/test'
 
 async function installTauri(page, { biometricFailure = false, rawCancelFailure = false, biometryType = 'WindowsHello' } = {}) {
   await page.addInitScript(({ biometricFailure, rawCancelFailure, biometryType }) => {
+    // Ces scénarios décrivent le thème clair ; le thème sombre est le défaut de l’app.
+    if (localStorage.getItem('clave-dark-mode') === null) localStorage.setItem('clave-dark-mode', 'false')
     const invoke = async (command) => {
       if (command === 'auth_status') return { configured: true, unlocked: false }
       if (command === 'biometrie_status') {

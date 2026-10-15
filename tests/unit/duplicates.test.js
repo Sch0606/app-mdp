@@ -1,6 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { duplicatePairKey, findDuplicateEntries, normalizeDomain } from '../../src/lib/passwordStrength.js'
+import { duplicatePairKey, findDuplicateEntries, normalizeDomain, supportsTwoFactor } from '../../src/lib/passwordStrength.js'
+
+test('la 2FA n’est recommandée que pour les services de l’annuaire', () => {
+  const domains = new Set(['github.com', 'google.co.uk'])
+  assert.equal(supportsTwoFactor('https://www.github.com/login', domains), true)
+  assert.equal(supportsTwoFactor('gist.github.com', domains), true)
+  assert.equal(supportsTwoFactor('accounts.google.co.uk', domains), true)
+  assert.equal(supportsTwoFactor('forum.example.org', domains), false)
+  assert.equal(supportsTwoFactor('notgithub.com', domains), false)
+  assert.equal(supportsTwoFactor('', domains), false)
+  assert.equal(supportsTwoFactor('github.com', new Set()), false)
+})
 
 const entry = (overrides) => ({ category: 'Perso', index: 0, plateforme: 'GitHub', email: 'moi@x.fr', site: '', created_at: 1, updated_at: 1, ...overrides })
 

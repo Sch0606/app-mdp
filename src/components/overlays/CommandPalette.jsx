@@ -2,6 +2,7 @@ import { Copy, Edit3, ExternalLink, KeyRound, Search, ShieldCheck, UserRound, X 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { normalizeText } from '../../lib/security.js'
 import { ModalLayer } from './ModalLayer.jsx'
+import { modifierLabel as mod } from '../../lib/hotkeys.js'
 
 function fuzzyScore(normalized, haystack) {
   if (!normalized) return 1
@@ -19,11 +20,11 @@ function fuzzyScore(normalized, haystack) {
 }
 
 const actions = [
-  { id: 'copy-password', label: 'Mot de passe', icon: Copy, shortcut: 'Ctrl+P' },
-  { id: 'copy-email', label: 'Identifiant', icon: UserRound, shortcut: 'Ctrl+U' },
+  { id: 'copy-password', label: 'Mot de passe', icon: Copy, shortcut: `${mod}P` },
+  { id: 'copy-email', label: 'Identifiant', icon: UserRound, shortcut: `${mod}U` },
   { id: 'edit', label: 'Modifier', icon: Edit3, shortcut: 'Entrée' },
-  { id: 'open-site', label: 'Site', icon: ExternalLink, shortcut: 'Ctrl+O', needs: (entry) => entry.site },
-  { id: 'totp', label: '2FA', icon: ShieldCheck, shortcut: 'Ctrl+T', needs: (entry) => entry.totp_secret },
+  { id: 'open-site', label: 'Site', icon: ExternalLink, shortcut: `${mod}O`, needs: (entry) => entry.site },
+  { id: 'totp', label: '2FA', icon: ShieldCheck, shortcut: `${mod}T`, needs: (entry) => entry.totp_secret },
 ]
 
 export function CommandPalette({ open, entries, onClose, onAction }) {
@@ -109,7 +110,7 @@ export function CommandPalette({ open, entries, onClose, onAction }) {
           ))}
           {!results.length && <p className="command-empty">Aucun accès ne correspond à cette recherche.</p>}
         </div>
-        <footer><span>↑ ↓ naviguer</span><span>Entrée modifier</span><span>Ctrl+P copier</span><span>Ctrl+O ouvrir</span></footer>
+        <footer><span>↑ ↓ naviguer</span><span>Entrée modifier</span><span>{mod}P copier</span><span>{mod}O ouvrir</span></footer>
       </ModalLayer>
     </>
   )

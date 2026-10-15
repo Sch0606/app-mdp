@@ -6,7 +6,7 @@ use std::{
 };
 
 use aes_gcm::{
-    aead::{Aead, KeyInit},
+    aead::{Aead, KeyInit, Payload},
     Aes256Gcm, Nonce,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -17,9 +17,22 @@ use sha2::Sha256;
 use thiserror::Error;
 
 const AUTH_VERSION: u8 = 2;
-const BACKUP_VERSION: u8 = 1;
-const VAULT_VERSION: u8 = 3;
+const BACKUP_VERSION: u8 = 2;
+const LEGACY_BACKUP_VERSION: u8 = 1;
+/// v4 : le document logique complet (entrées, catégories, favoris, dates,
+/// historique, corbeille) est chiffré en un seul bloc AES-256-GCM dont la
+/// version et le format sont authentifiés (données associées).
+const VAULT_VERSION: u8 = 4;
+const VAULT_FORMAT: &str = "clave-vault";
+const VAULT_CIPHER: &str = "AES-256-GCM";
 const KDF_ITERATIONS: u32 = 210_000;
+/// Bornes appliquées à tout paramètre KDF lu depuis un fichier, avant dérivation.
+const MIN_KDF_ITERATIONS: u32 = 100_000;
+const MAX_KDF_ITERATIONS: u32 = 5_000_000;
+const MIN_SALT_BYTES: usize = 16;
+const MAX_SALT_BYTES: usize = 64;
+/// Taille maximale d’une sauvegarde ou d’un fichier d’import.
+pub const MAX_IMPORT_BYTES: usize = 32 * 1024 * 1024;
 const AUTH_VERIFIER: &[u8] = b"clave-auth-v1";
 const KDF_NAME: &str = "PBKDF2-HMAC-SHA256";
 const RECOVERY_KEY_BYTES: usize = 20;
@@ -54,7 +67,7 @@ pub struct PasswordEntry {
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivityRecord {
     pub categorie: String,
     pub action: String,
@@ -64,18 +77,31 @@ pub struct ActivityRecord {
     pub entry_index: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrashRecord {
     pub categorie: String,
     pub entry: PasswordEntry,
     pub timestamp: u64,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct VaultState {
     categories: CategoryMap,
+    #[serde(default)]
     history: Vec<ActivityRecord>,
+    #[serde(default)]
     trash: Vec<TrashRecord>,
+}
+
+/// Coffre v4 sur disque : seul l’en-tête est lisible, et il est authentifié.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SealedVault {
+    version: u8,
+    encrypted: bool,
+    format: String,
+    cipher: String,
+    payload: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,6 +133,7 @@ struct KeySlot {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BackupFile {
     version: u8,
     kdf: String,
@@ -191,6 +218,12 @@ pub enum StoreError {
     InvalidRecoveryKey,
     #[error("Aucune cle de recuperation n'est configuree pour ce coffre.")]
     RecoveryNotConfigured,
+    #[error("Parametres de derivation de cle refuses.")]
+    UnsupportedKdf,
+    #[error("Format de fichier non pris en charge.")]
+    UnsupportedFormat,
+    #[error("Fichier trop volumineux.")]
+    TooLarge,
 }
 
 pub struct PasswordStore {
@@ -282,9 +315,7 @@ impl PasswordStore {
         if normalized.is_empty() {
             return Err(StoreError::InvalidRecoveryKey);
         }
-        let salt = STANDARD
-            .decode(slot.salt.trim())
-            .map_err(|_| StoreError::InvalidKey)?;
+        let salt = Self::checked_kdf(&slot.kdf, slot.iterations, &slot.salt)?;
         let kek = Self::derive_key_from_parts(&normalized, &salt, slot.iterations);
         let unwrapped = Self::decrypt_payload(&kek, &slot.wrapped_key)
             .map_err(|_| StoreError::InvalidRecoveryKey)?;
@@ -355,11 +386,26 @@ impl PasswordStore {
         }
 
         let value: serde_json::Value = serde_json::from_str(&raw)?;
-        if value
+        let encrypted = value
             .get("encrypted")
             .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-        {
+            .unwrap_or(false);
+        let version = value
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        if encrypted && version == u64::from(VAULT_VERSION) {
+            let sealed: SealedVault = serde_json::from_value(value)?;
+            let mut state = self.open_sealed_vault(&sealed)?;
+            Self::normalize_state(&mut state);
+            return Ok(state);
+        }
+        if encrypted && version > u64::from(VAULT_VERSION) {
+            return Err(StoreError::UnsupportedFormat);
+        }
+        if encrypted {
+            // Coffre v3 et antérieurs (métadonnées en clair) : lu puis
+            // immédiatement réécrit au format scellé v4.
             let vault: EncryptedVault = serde_json::from_value(value)?;
             let categories = self.decrypt_categories(vault.categories)?;
             let history = vault
@@ -391,20 +437,8 @@ impl PasswordStore {
                 history,
                 trash,
             };
-            let now = Self::now();
-            for entries in state.categories.values_mut() {
-                for entry in entries {
-                    if entry.created_at == 0 {
-                        entry.created_at = now;
-                    }
-                    if entry.updated_at == 0 {
-                        entry.updated_at = entry.created_at;
-                    }
-                }
-            }
-            state
-                .trash
-                .retain(|item| now.saturating_sub(item.timestamp) < PURGE_AFTER_SECONDS);
+            Self::normalize_state(&mut state);
+            self.save_state(&state)?;
             return Ok(state);
         }
 
@@ -423,37 +457,53 @@ impl PasswordStore {
         self.save_state(&state)
     }
 
+    fn normalize_state(state: &mut VaultState) {
+        let now = Self::now();
+        for entries in state.categories.values_mut() {
+            for entry in entries {
+                if entry.created_at == 0 {
+                    entry.created_at = now;
+                }
+                if entry.updated_at == 0 {
+                    entry.updated_at = entry.created_at;
+                }
+            }
+        }
+        state
+            .trash
+            .retain(|item| now.saturating_sub(item.timestamp) < PURGE_AFTER_SECONDS);
+    }
+
+    fn vault_associated_data() -> Vec<u8> {
+        format!("{VAULT_FORMAT}|v{VAULT_VERSION}|{VAULT_CIPHER}").into_bytes()
+    }
+
+    fn open_sealed_vault(&self, sealed: &SealedVault) -> Result<VaultState, StoreError> {
+        if sealed.format != VAULT_FORMAT || sealed.cipher != VAULT_CIPHER || !sealed.encrypted {
+            return Err(StoreError::UnsupportedFormat);
+        }
+        let plaintext = Self::decrypt_payload_with_aad(
+            &self.require_key()?,
+            &sealed.payload,
+            &Self::vault_associated_data(),
+        )?;
+        Ok(serde_json::from_slice(&plaintext)?)
+    }
+
     fn save_state(&self, state: &VaultState) -> Result<(), StoreError> {
-        let vault = EncryptedVault {
+        let plaintext = serde_json::to_vec(state)?;
+        let sealed = SealedVault {
             version: VAULT_VERSION,
             encrypted: true,
-            categories: self.encrypt_categories(&state.categories)?,
-            history: state
-                .history
-                .iter()
-                .map(|r| {
-                    Ok(EncryptedActivityRecord {
-                        categorie: r.categorie.clone(),
-                        action: r.action.clone(),
-                        entry: self.encrypt_entry(&r.entry)?,
-                        timestamp: r.timestamp,
-                        entry_index: r.entry_index,
-                    })
-                })
-                .collect::<Result<Vec<_>, StoreError>>()?,
-            trash: state
-                .trash
-                .iter()
-                .map(|r| {
-                    Ok(EncryptedTrashRecord {
-                        categorie: r.categorie.clone(),
-                        entry: self.encrypt_entry(&r.entry)?,
-                        timestamp: r.timestamp,
-                    })
-                })
-                .collect::<Result<Vec<_>, StoreError>>()?,
+            format: VAULT_FORMAT.to_string(),
+            cipher: VAULT_CIPHER.to_string(),
+            payload: Self::encrypt_payload_with_aad(
+                &self.require_key()?,
+                &plaintext,
+                &Self::vault_associated_data(),
+            )?,
         };
-        self.write_json(&vault)
+        self.write_json(&sealed)
     }
 
     pub fn add_password(
@@ -759,6 +809,10 @@ impl PasswordStore {
         self.save(&categories)
     }
 
+    fn backup_associated_data(version: u8, kdf: &str, iterations: u32, salt: &str) -> Vec<u8> {
+        format!("clave-backup|v{version}|{kdf}|{iterations}|{salt}").into_bytes()
+    }
+
     pub fn export_backup(&self, password: String) -> Result<String, StoreError> {
         if password.trim().len() < 8 {
             return Err(StoreError::InvalidPassword);
@@ -769,13 +823,15 @@ impl PasswordStore {
         OsRng.fill_bytes(&mut salt);
         let key = Self::derive_key_from_parts(&password, &salt, KDF_ITERATIONS);
         let payload = serde_json::to_vec(&categories)?;
+        let salt = STANDARD.encode(salt);
+        let aad = Self::backup_associated_data(BACKUP_VERSION, KDF_NAME, KDF_ITERATIONS, &salt);
 
         let backup = BackupFile {
             version: BACKUP_VERSION,
             kdf: KDF_NAME.to_string(),
             iterations: KDF_ITERATIONS,
-            salt: STANDARD.encode(salt),
-            payload: Self::encrypt_payload(&key, &payload)?,
+            payload: Self::encrypt_payload_with_aad(&key, &payload, &aad)?,
+            salt,
         };
 
         serde_json::to_string_pretty(&backup).map_err(StoreError::from)
@@ -786,17 +842,50 @@ impl PasswordStore {
         password: String,
         backup_json: String,
     ) -> Result<CategoryMap, StoreError> {
-        let backup: BackupFile = serde_json::from_str(&backup_json)?;
-        let salt = STANDARD
-            .decode(backup.salt.trim())
-            .map_err(|_| StoreError::InvalidKey)?;
+        if backup_json.len() > MAX_IMPORT_BYTES {
+            return Err(StoreError::TooLarge);
+        }
+        // Tous les paramètres sont validés avant la moindre dérivation coûteuse.
+        let backup: BackupFile =
+            serde_json::from_str(&backup_json).map_err(|_| StoreError::UnsupportedFormat)?;
+        if backup.version != BACKUP_VERSION && backup.version != LEGACY_BACKUP_VERSION {
+            return Err(StoreError::UnsupportedFormat);
+        }
+        let salt = Self::checked_kdf(&backup.kdf, backup.iterations, &backup.salt)?;
         let key = Self::derive_key_from_parts(&password, &salt, backup.iterations);
-        let decrypted = Self::decrypt_payload(&key, &backup.payload)
-            .map_err(|_| StoreError::InvalidPassword)?;
+        let decrypted = if backup.version == LEGACY_BACKUP_VERSION {
+            Self::decrypt_payload(&key, &backup.payload)
+        } else {
+            let aad = Self::backup_associated_data(
+                backup.version,
+                &backup.kdf,
+                backup.iterations,
+                backup.salt.trim(),
+            );
+            Self::decrypt_payload_with_aad(&key, &backup.payload, &aad)
+        }
+        .map_err(|_| StoreError::InvalidPassword)?;
         let categories: CategoryMap = serde_json::from_slice(&decrypted)?;
 
         self.save(&categories)?;
         Ok(categories)
+    }
+
+    /// Valide nom du KDF, nombre d’itérations et sel, puis renvoie le sel décodé.
+    fn checked_kdf(kdf: &str, iterations: u32, salt: &str) -> Result<Vec<u8>, StoreError> {
+        if kdf != KDF_NAME || !(MIN_KDF_ITERATIONS..=MAX_KDF_ITERATIONS).contains(&iterations) {
+            return Err(StoreError::UnsupportedKdf);
+        }
+        if salt.len() > MAX_SALT_BYTES * 2 {
+            return Err(StoreError::UnsupportedKdf);
+        }
+        let salt = STANDARD
+            .decode(salt.trim())
+            .map_err(|_| StoreError::UnsupportedKdf)?;
+        if !(MIN_SALT_BYTES..=MAX_SALT_BYTES).contains(&salt.len()) {
+            return Err(StoreError::UnsupportedKdf);
+        }
+        Ok(salt)
     }
 
     pub fn generate_password() -> String {
@@ -820,11 +909,7 @@ impl PasswordStore {
             fs::create_dir_all(parent)?;
         }
 
-        fs::write(
-            &self.data_file,
-            serde_json::to_string_pretty(value)?.as_bytes(),
-        )?;
-        Ok(())
+        Self::write_atomically(&self.data_file, serde_json::to_string_pretty(value)?.as_bytes())
     }
 
     fn write_auth_file(&self, auth: &AuthFile) -> Result<(), StoreError> {
@@ -832,10 +917,17 @@ impl PasswordStore {
             fs::create_dir_all(parent)?;
         }
 
-        fs::write(
-            &self.auth_file,
-            serde_json::to_string_pretty(auth)?.as_bytes(),
-        )?;
+        Self::write_atomically(&self.auth_file, serde_json::to_string_pretty(auth)?.as_bytes())
+    }
+
+    /// Écrit dans un fichier temporaire puis le renomme : une coupure pendant
+    /// l’écriture ne laisse jamais un coffre tronqué.
+    fn write_atomically(path: &std::path::Path, bytes: &[u8]) -> Result<(), StoreError> {
+        let mut temporary = path.as_os_str().to_owned();
+        temporary.push(".tmp");
+        let temporary = PathBuf::from(temporary);
+        fs::write(&temporary, bytes)?;
+        fs::rename(&temporary, path)?;
         Ok(())
     }
 
@@ -903,24 +995,6 @@ impl PasswordStore {
             .collect()
     }
 
-    fn encrypt_categories(
-        &self,
-        categories: &CategoryMap,
-    ) -> Result<BTreeMap<String, Vec<EncryptedEntry>>, StoreError> {
-        let mut encrypted = BTreeMap::new();
-
-        for (category, entries) in categories {
-            let encrypted_entries = entries
-                .iter()
-                .map(|entry| self.encrypt_entry(entry))
-                .collect::<Result<Vec<_>, StoreError>>()?;
-
-            encrypted.insert(category.clone(), encrypted_entries);
-        }
-
-        Ok(encrypted)
-    }
-
     fn decrypt_categories(
         &self,
         categories: BTreeMap<String, Vec<EncryptedEntry>>,
@@ -937,23 +1011,6 @@ impl PasswordStore {
         }
 
         Ok(decrypted)
-    }
-
-    fn encrypt_entry(&self, entry: &PasswordEntry) -> Result<EncryptedEntry, StoreError> {
-        Ok(EncryptedEntry {
-            plateforme: entry.plateforme.clone(),
-            email: entry.email.clone(),
-            mdp: self.encrypt_text(&entry.mdp)?,
-            site: entry.site.clone(),
-            notes: self.encrypt_text(&entry.notes)?,
-            totp_secret: self.encrypt_text(&entry.totp_secret)?,
-            icon_url: entry.icon_url.clone(),
-            favorite: entry.favorite,
-            created_at: entry.created_at,
-            updated_at: entry.updated_at,
-            last_accessed: entry.last_accessed,
-            tags: entry.tags.clone(),
-        })
     }
 
     fn decrypt_entry(&self, entry: EncryptedEntry) -> Result<PasswordEntry, StoreError> {
@@ -988,10 +1045,6 @@ impl PasswordStore {
             .as_secs()
     }
 
-    fn encrypt_text(&self, text: &str) -> Result<String, StoreError> {
-        Self::encrypt_payload(&self.require_key()?, text.as_bytes())
-    }
-
     fn decrypt_text(&self, value: &str) -> Result<String, StoreError> {
         let decrypted = Self::decrypt_payload(&self.require_key()?, value)?;
         String::from_utf8(decrypted).map_err(|_| StoreError::Crypto)
@@ -1014,6 +1067,38 @@ impl PasswordStore {
         Ok(STANDARD.encode(payload))
     }
 
+    fn encrypt_payload_with_aad(
+        key: &[u8; 32],
+        value: &[u8],
+        aad: &[u8],
+    ) -> Result<String, StoreError> {
+        let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| StoreError::InvalidKey)?;
+        let mut nonce_bytes = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let encrypted = cipher
+            .encrypt(Nonce::from_slice(&nonce_bytes), Payload { msg: value, aad })
+            .map_err(|_| StoreError::Crypto)?;
+        let mut payload = nonce_bytes.to_vec();
+        payload.extend(encrypted);
+        Ok(STANDARD.encode(payload))
+    }
+
+    fn decrypt_payload_with_aad(
+        key: &[u8; 32],
+        value: &str,
+        aad: &[u8],
+    ) -> Result<Vec<u8>, StoreError> {
+        let payload = STANDARD.decode(value).map_err(|_| StoreError::Crypto)?;
+        if payload.len() < 13 {
+            return Err(StoreError::Crypto);
+        }
+        let (nonce_bytes, encrypted) = payload.split_at(12);
+        let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| StoreError::InvalidKey)?;
+        cipher
+            .decrypt(Nonce::from_slice(nonce_bytes), Payload { msg: encrypted, aad })
+            .map_err(|_| StoreError::Crypto)
+    }
+
     fn decrypt_payload(key: &[u8; 32], value: &str) -> Result<Vec<u8>, StoreError> {
         let payload = STANDARD.decode(value).map_err(|_| StoreError::Crypto)?;
         if payload.len() < 13 {
@@ -1028,9 +1113,7 @@ impl PasswordStore {
     }
 
     fn derive_key(password: &str, auth: &AuthFile) -> Result<[u8; 32], StoreError> {
-        let salt = STANDARD
-            .decode(auth.salt.trim())
-            .map_err(|_| StoreError::InvalidKey)?;
+        let salt = Self::checked_kdf(&auth.kdf, auth.iterations, &auth.salt)?;
         Ok(Self::derive_key_from_parts(
             password,
             &salt,
@@ -1127,6 +1210,93 @@ pub fn normalize_tags(tags: &[String]) -> Vec<String> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn vault_metadata_is_sealed_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = unlocked_store(dir.path());
+        store
+            .add_password(
+                "Banque secrète".to_string(),
+                PasswordEntry {
+                    plateforme: "MaBanque".to_string(),
+                    email: "lea@example.fr".to_string(),
+                    mdp: "secret-123".to_string(),
+                    site: "https://banque.example".to_string(),
+                    tags: vec!["finances".to_string()],
+                    favorite: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let raw = fs::read_to_string(dir.path().join("passwords.json")).unwrap();
+        for leaked in ["MaBanque", "lea@example.fr", "banque.example", "finances", "secrète", "creation", "favorite"] {
+            assert!(!raw.contains(leaked), "{leaked} est lisible");
+        }
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value["version"], 4);
+
+        // La version est authentifiée : la modifier rend le coffre illisible.
+        let tampered = raw.replace("\"format\": \"clave-vault\"", "\"format\": \"autre\"");
+        fs::write(dir.path().join("passwords.json"), tampered).unwrap();
+        assert!(store.load().is_err());
+    }
+
+    #[test]
+    fn legacy_v3_vault_is_migrated_to_the_sealed_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = unlocked_store(dir.path());
+        let key = store.require_key().unwrap();
+        let legacy = serde_json::json!({
+            "version": 3,
+            "encrypted": true,
+            "categories": { "Perso": [{
+                "plateforme": "Gmail",
+                "email": "user@example.com",
+                "mdp": PasswordStore::encrypt_payload(&key, b"ancien").unwrap(),
+            }]}
+        });
+        fs::write(dir.path().join("passwords.json"), legacy.to_string()).unwrap();
+        let categories = store.load().unwrap();
+        assert_eq!(categories["Perso"][0].mdp, "ancien");
+        let raw = fs::read_to_string(dir.path().join("passwords.json")).unwrap();
+        assert!(!raw.contains("Gmail"));
+    }
+
+    #[test]
+    fn backup_with_absurd_kdf_parameters_is_rejected_before_derivation() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = unlocked_store(dir.path());
+        let salt = STANDARD.encode([7u8; 16]);
+        for (kdf, iterations) in [
+            (KDF_NAME, u32::MAX),
+            (KDF_NAME, 1),
+            ("scrypt", KDF_ITERATIONS),
+        ] {
+            let backup = serde_json::json!({
+                "version": 2, "kdf": kdf, "iterations": iterations,
+                "salt": salt, "payload": "AAAA"
+            });
+            let started = std::time::Instant::now();
+            assert!(matches!(
+                store.import_backup("x".repeat(12), backup.to_string()),
+                Err(StoreError::UnsupportedKdf)
+            ));
+            assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        }
+        let unknown = serde_json::json!({
+            "version": 2, "kdf": KDF_NAME, "iterations": KDF_ITERATIONS,
+            "salt": salt, "payload": "AAAA", "memory": 999999
+        });
+        assert!(matches!(
+            store.import_backup("x".repeat(12), unknown.to_string()),
+            Err(StoreError::UnsupportedFormat)
+        ));
+        assert!(matches!(
+            store.import_backup("x".repeat(12), " ".repeat(MAX_IMPORT_BYTES + 1)),
+            Err(StoreError::TooLarge)
+        ));
+    }
 
     fn store_in(path: &Path) -> PasswordStore {
         PasswordStore::new(

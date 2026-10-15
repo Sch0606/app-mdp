@@ -2,6 +2,8 @@ import { test, expect } from '@playwright/test'
 
 async function installVault(page, { locked = false } = {}) {
   await page.addInitScript(({ locked }) => {
+    // Ces scénarios décrivent le thème clair ; le thème sombre est le défaut de l’app.
+    if (localStorage.getItem('clave-dark-mode') === null) localStorage.setItem('clave-dark-mode', 'false')
     const entries = [
       { plateforme: 'GitHub', email: 'dev@example.fr', mdp: 'Long-secret-42!Unique', site: 'https://github.com', notes: '', totp_secret: '', icon_url: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"%3E%3Cpath fill="%23111" d="M4 4h16v16H4z"/%3E%3C/svg%3E', favorite: true, updated_at: 2_000_000 },
       { plateforme: 'Banque principale', email: 'lea@example.fr', mdp: 'Secret-123!', site: '', notes: '', totp_secret: '', favorite: false, updated_at: 2_000_000 },

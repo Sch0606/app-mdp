@@ -24,6 +24,9 @@ pub const DEFAULT_IMPORT_CATEGORY: &str = "Import navigateur";
 
 /// Détecte le format d'après le contenu puis délègue au bon parseur.
 pub fn parse_import_file(text: &str) -> Result<Vec<ImportCandidate>, String> {
+    if text.len() > crate::store::MAX_IMPORT_BYTES {
+        return Err("Fichier d’import trop volumineux.".to_string());
+    }
     let trimmed = text.trim_start_matches('\u{feff}').trim_start();
     if trimmed.starts_with('{') {
         parse_bitwarden_json(trimmed)

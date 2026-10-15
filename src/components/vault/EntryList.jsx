@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { Clock3, Copy, Ellipsis, KeyRound, Star } from 'lucide-react'
+import { Copy, Ellipsis, KeyRound, ShieldCheck, Star } from 'lucide-react'
 import { memo, useEffect, useState } from 'react'
 import { tauri } from '../../lib/tauri.js'
 
@@ -82,8 +82,8 @@ function TotpCode({ entry, onCopy }) {
   const remaining = Math.max(0, (totp?.expiresAt || now) - now)
   return (
     <button className="entry-totp-code" type="button" onClick={() => onCopy(entry)} aria-label={`Copier le code temporaire de ${entry.plateforme}`} title="Copier le code temporaire">
-      <Clock3 size={15} />
-      <span>{formatTotp(totp?.code) || '2FA'}</span>
+      <ShieldCheck className="entry-totp-shield" size={17} strokeWidth={2.2} />
+      <span className="entry-totp-pill">{formatTotp(totp?.code) || '2FA'}</span>
       <small>{remaining} s</small>
     </button>
   )

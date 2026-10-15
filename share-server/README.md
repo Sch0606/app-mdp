@@ -4,6 +4,7 @@ Petit serveur Node (aucune dépendance) qui héberge les liens de partage à usa
 Clave en a besoin pour la fonction **Partager par lien** : sans serveur, le partage reste désactivé.
 
 - [Comment ça marche](#comment-ça-marche)
+- [Modèle de menace et limite importante](#modèle-de-menace-et-limite-importante)
 - [Ce qu’il vous faut](#ce-quil-vous-faut)
 - [Option 1 — Docker (recommandé)](#option-1--docker-recommandé)
 - [Option 2 — Installation manuelle (Node + Caddy)](#option-2--installation-manuelle-node--caddy)
@@ -23,6 +24,29 @@ Clave en a besoin pour la fonction **Partager par lien** : sans serveur, le part
 
 Les secrets non consultés expirent (5 min à 7 jours). Ils sont gardés uniquement en mémoire :
 redémarrer le serveur efface tous les liens en attente.
+
+## Modèle de menace et limite importante
+
+Le chiffrement de bout en bout protège contre un serveur **passif et honnête** : une fuite de
+la mémoire ou des journaux du serveur ne révèle aucun secret.
+
+Il **ne protège pas** contre un serveur **compromis ou malveillant**. La page `/s/<id>` et son
+script `viewer.js` sont fournis par ce même serveur : un attaquant qui le contrôle peut les
+remplacer par une version qui lit la clé dans le fragment `#…` et la lui transmet.
+
+Pour les secrets sensibles, utilisez le **déchiffreur hors ligne**
+[`offline/dechiffreur-clave.html`](offline/dechiffreur-clave.html) :
+
+1. Conservez-en une copie locale (ou hébergez-la sur un domaine distinct du serveur de stockage).
+2. Vérifiez son empreinte avant usage :
+   ```bash
+   sha256sum dechiffreur-clave.html
+   ```
+   Empreinte attendue : `1422b591339e221bb4b1302bce9b7569838ca68d3fa3887ee64f14b3df201e79`
+3. Ouvrez le fichier dans le navigateur et collez le lien complet. La page ne demande au
+   serveur que le texte chiffré ; la clé ne lui est jamais transmise.
+
+Le destinataire doit obtenir ce fichier et son empreinte par un canal distinct du lien.
 
 ## Ce qu’il vous faut
 

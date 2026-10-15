@@ -5,6 +5,7 @@ import { LockScreen } from './components/auth/LockScreen.jsx'
 import { Toast } from './components/overlays/Toast.jsx'
 import { tauri, errorMessage } from './lib/tauri.js'
 import { refreshVaultFromExternalChange } from './lib/externalVaultSync.js'
+import { displayHotkey, hotkeyFromEvent, isModifierOnly, isReservedHotkey } from './lib/hotkeys.js'
 import { motionProps } from './motion/presets.js'
 import { initialVaultState, vaultReducer } from './state/vaultReducer.js'
 import { allEntries, generateSecurePassword, normalizeSiteUrl, normalizeTags } from './lib/security.js'
@@ -81,12 +82,20 @@ export function App() {
     autoLockDelay: Number(localStorage.getItem('clave-auto-lock-delay') || 300000),
     clipboardDelay: Number(localStorage.getItem('clave-clipboard-clear-delay') || 30000),
     showToolbarLock: localStorage.getItem('clave-show-toolbar-lock') !== 'false',
-    darkMode: localStorage.getItem('clave-dark-mode') === 'true',
+    darkMode: localStorage.getItem('clave-dark-mode') !== 'false',
     lockHotkey: localStorage.getItem('clave-lock-hotkey') || '',
     shareServer: localStorage.getItem('clave-share-server') || '',
   }))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+
+  // Le fond de la fenêtre suit le thème : pas de flash clair au lancement ni
+  // derrière les modales.
+  useEffect(() => {
+    const theme = preferences.darkMode ? 'dark' : 'light'
+    document.documentElement.dataset.theme = theme
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', preferences.darkMode ? '#0a0d0c' : '#eef5f2')
+  }, [preferences.darkMode])
 
   useEffect(() => {
     let active = true
@@ -180,6 +189,29 @@ export function App() {
     }
   }, [phase])
 
+  useEffect(() => {
+    if (phase !== 'unlocked') return undefined
+
+    let active = true
+    let stopListening = () => {}
+
+    // Barre de menus macOS : Réglages… (⌘,), Rechercher… (⌘K), Verrouiller (⇧⌘L).
+    tauri.listen('menu-action', ({ payload }) => {
+      if (!active) return
+      if (payload === 'settings') openSettings()
+      else if (payload === 'search') setCommandOpen(true)
+      else if (payload === 'lock') lockVault()
+    }).then((unlisten) => {
+      if (active) stopListening = unlisten
+      else unlisten()
+    }).catch(() => {})
+
+    return () => {
+      active = false
+      stopListening()
+    }
+  }, [phase])
+
   useEffect(() => () => {
     clearTimeout(toastTimer.current)
     clearTimeout(clipboardTimer.current)
@@ -240,7 +272,7 @@ export function App() {
   useEffect(() => {
     if (phase !== 'unlocked' || !preferences.lockHotkey) return undefined
     function onHotkey(event) {
-      const pressed = [event.ctrlKey && 'Ctrl', event.altKey && 'Alt', event.shiftKey && 'Shift', event.metaKey && 'Meta', event.key.length === 1 ? event.key.toUpperCase() : event.key].filter(Boolean).join('+')
+      const pressed = hotkeyFromEvent(event)
       if (pressed === preferences.lockHotkey) {
         event.preventDefault()
         lockVault()
@@ -422,7 +454,7 @@ export function App() {
     }
   }
 
-  async function copySecure(value, message) {
+  async function copySecure(value, message, { maxClearDelay } = {}) {
     if (!value) return
     const session = sessionGeneration.current
     try {
@@ -433,7 +465,11 @@ export function App() {
       }
       showToast(message)
       clearTimeout(clipboardTimer.current)
-      const clearDelay = preferences.clipboardDelay
+      // `maxClearDelay` impose un effacement même si l’utilisateur l’a désactivé
+      // (secrets d’appairage qui ne doivent pas rester dans l’historique).
+      const clearDelay = maxClearDelay
+        ? Math.min(preferences.clipboardDelay || maxClearDelay, maxClearDelay)
+        : preferences.clipboardDelay
       if (clearDelay === 0) return
       clipboardTimer.current = setTimeout(async () => {
         try {
@@ -640,12 +676,18 @@ export function App() {
           break
         case 'record-hotkey': {
           showToast('Appuyez sur la combinaison de verrouillage.')
-          const capture = (event) => {
+          document.addEventListener('keydown', function capture(event) {
             event.preventDefault()
-            const value = [event.ctrlKey && 'Ctrl', event.altKey && 'Alt', event.shiftKey && 'Shift', event.metaKey && 'Meta', event.key.length === 1 ? event.key.toUpperCase() : event.key].filter(Boolean).join('+')
-            if (!['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) updatePreference('lockHotkey', value)
-          }
-          document.addEventListener('keydown', capture, { once: true })
+            // Les touches de modification seules ne terminent pas la capture.
+            if (isModifierOnly(event)) return
+            document.removeEventListener('keydown', capture)
+            const value = hotkeyFromEvent(event)
+            if (isReservedHotkey(value)) {
+              showToast(`${displayHotkey(value)} est réservé par macOS. Choisissez une autre combinaison.`)
+              return
+            }
+            updatePreference('lockHotkey', value)
+          })
           break
         }
         case 'export': setBackupDialog({ mode: 'export' }); break
@@ -676,8 +718,11 @@ export function App() {
           return true
         }
         case 'copy-autofill-token':
-          await tauri.clipboard.writeText(autofill.token)
-          showToast('Code d’appairage copié.')
+          await copySecure(
+            autofill.token,
+            'Code d’appairage copié, effacé dans 30 s. Renouvelez-le après l’appairage.',
+            { maxClearDelay: 30_000 },
+          )
           break
         case 'rotate-autofill-token': {
           const status = await tauri.invoke('rotate_autofill_token')

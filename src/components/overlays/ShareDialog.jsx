@@ -133,6 +133,7 @@ export function ShareDialog({ target, server, onShare, onCopy, onConfigure, onCl
         </div>
         {error && <p className="share-error" id="share-error" role="alert"><AlertCircle size={15} aria-hidden="true" /> {error}</p>}
         <p className="share-server"><Server size={13} aria-hidden="true" /> {serverHost(server)}</p>
+        <p className="share-server">Le lien n’est sûr que si ce serveur est de confiance : pour un secret sensible, le destinataire peut utiliser le déchiffreur hors ligne.</p>
       </div>
     )
     actions = <>

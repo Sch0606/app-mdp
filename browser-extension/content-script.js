@@ -1,5 +1,7 @@
 (async () => {
   if (globalThis.__claveAutofillLoaded) return
+  // Une page HTTP peut être modifiée en transit : aucun remplissage hors HTTPS.
+  if (location.protocol !== 'https:') return
   globalThis.__claveAutofillLoaded = true
 
   const { buildSuggestionModel, detectLoginFields, detectUsernameField, fillCredential, isLoginAction, shouldOfferSuggestion, suggestionAnchor, watchLoginCompletion } = await import(chrome.runtime.getURL('autofill-core.js'))

@@ -7,6 +7,7 @@ const pendingAudit = { weak: 0, reused: 0, stale: 0, score: 100, label: 'Analyse
 
 const CHANGE_ON_SITE_ISSUES = new Set(['breached', 'weak', 'reused', 'stale'])
 const idleBreach = { status: 'idle', counts: new Map(), checked: 0, error: '' }
+const loadingTwoFactor = { status: 'loading', domains: new Set() }
 
 const DISMISSED_DUPLICATES_KEY = 'clave-dismissed-duplicates'
 const COMPARED_FIELDS = [
@@ -117,6 +118,8 @@ export function HealthView({ entries, onAction }) {
   const [breach, setBreach] = useState(idleBreach)
   const [duplicates, setDuplicates] = useState([])
   const [dismissed, setDismissed] = useState(readDismissedDuplicates)
+  const [twoFactor, setTwoFactor] = useState(loadingTwoFactor)
+  const [supportsTwoFactor, setSupportsTwoFactor] = useState(null)
   const breachRequest = useRef(0)
   const now = Math.floor(Date.now() / 1000)
   const signature = useMemo(
@@ -140,6 +143,22 @@ export function HealthView({ entries, onAction }) {
     })
     return () => { active = false }
   }, [entries, signature])
+
+  // Annuaire 2fa.directory : la 2FA n’est recommandée que si le service la propose.
+  useEffect(() => {
+    let active = true
+    import('../../lib/passwordStrength.js').then(({ supportsTwoFactor: matcher }) => {
+      if (active) setSupportsTwoFactor(() => matcher)
+    })
+    tauri.invoke('domaines_2fa')
+      .then((domains) => {
+        if (active) setTwoFactor({ status: 'done', domains: new Set(Array.isArray(domains) ? domains : []) })
+      })
+      .catch(() => {
+        if (active) setTwoFactor({ status: 'error', domains: new Set() })
+      })
+    return () => { active = false }
+  }, [])
 
   function dismissDuplicate(key) {
     setDismissed((current) => {
@@ -215,10 +234,15 @@ export function HealthView({ entries, onAction }) {
     },
     {
       id: 'totp',
-      title: 'Entrées sans 2FA',
+      title: '2FA disponible mais inactive',
       icon: <ShieldQuestion size={18} />,
-      advice: 'Activez un code 2FA quand le service le propose.',
-      entries: entries.filter((entry) => !entry.totp_secret),
+      advice: twoFactor.status === 'error'
+        ? 'Annuaire 2FA indisponible : impossible de vérifier quels services proposent la 2FA.'
+        : 'Ces services proposent un code 2FA : activez-le pour protéger l’accès.',
+      pending: twoFactor.status === 'loading' || !supportsTwoFactor,
+      entries: twoFactor.status === 'done' && supportsTwoFactor
+        ? entries.filter((entry) => !entry.totp_secret && supportsTwoFactor(entry.site, twoFactor.domains))
+        : [],
     },
     {
       id: 'site',
@@ -227,7 +251,7 @@ export function HealthView({ entries, onAction }) {
       advice: 'Ajouter le site améliore la recherche et l’icône associée.',
       entries: entries.filter((entry) => !entry.site),
     },
-  ], [breach.counts, entries, now, passwordCounts, strengths])
+  ], [breach.counts, entries, now, passwordCounts, strengths, supportsTwoFactor, twoFactor])
 
   const totalIssues = issueCount(issues) + visibleDuplicates.length
 
@@ -252,7 +276,7 @@ export function HealthView({ entries, onAction }) {
                 <h3>{issue.title}</h3>
                 <p>{issue.advice}</p>
               </div>
-              <strong>{issue.breach && breach.status !== 'done' ? '–' : issue.entries.length}</strong>
+              <strong>{(issue.breach && breach.status !== 'done') || issue.pending ? '–' : issue.entries.length}</strong>
             </header>
             {issue.breach && breach.status !== 'done' ? (
               <div className="breach-check" id="breach-check">
@@ -283,7 +307,7 @@ export function HealthView({ entries, onAction }) {
                 {issue.entries.length > 5 && <small>{issue.entries.length - 5} autre{issue.entries.length - 5 > 1 ? 's' : ''} entrée{issue.entries.length - 5 > 1 ? 's' : ''}</small>}
               </div>
             ) : (
-              <p className="health-empty">{issue.breach ? `Aucune fuite connue parmi ${breach.checked} mot${breach.checked > 1 ? 's' : ''} de passe vérifié${breach.checked > 1 ? 's' : ''}.` : 'Aucun problème détecté.'}</p>
+              <p className="health-empty">{issue.pending ? 'Vérification des services compatibles…' : issue.id === 'totp' && twoFactor.status === 'error' ? 'Aucune recommandation sans l’annuaire 2FA.' : issue.breach ? `Aucune fuite connue parmi ${breach.checked} mot${breach.checked > 1 ? 's' : ''} de passe vérifié${breach.checked > 1 ? 's' : ''}.` : 'Aucun problème détecté.'}</p>
             )}
           </section>
         ))}

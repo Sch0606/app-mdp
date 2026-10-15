@@ -122,6 +122,20 @@ export function normalizeDomain(value = '') {
   }
 }
 
+/**
+ * Vrai si le site appartient à un service de l’annuaire 2FA (`domains`, un Set
+ * de domaines normalisés) : l’hôte lui-même ou l’un de ses domaines parents.
+ */
+export function supportsTwoFactor(site, domains) {
+  const host = normalizeDomain(site)
+  if (!host || !domains?.size) return false
+  const labels = host.split('.')
+  for (let start = 0; start < labels.length - 1; start += 1) {
+    if (domains.has(labels.slice(start).join('.'))) return true
+  }
+  return false
+}
+
 function duplicateIdentity(entry) {
   const domain = normalizeDomain(entry.site)
   const username = String(entry.email || '').trim().toLowerCase()

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { Eye, EyeOff, Hash, KeyRound, Sparkles, X } from 'lucide-react'
+import { Check, Eye, EyeOff, Hash, KeyRound, Minus, Plus, Sparkles, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { normalizeSiteUrl, normalizeTags, normalizeTotpSecret, siteIconFallback } from '../../lib/security.js'
 import { tauri } from '../../lib/tauri.js'
@@ -7,6 +7,13 @@ import { softSpring } from '../../motion/presets.js'
 
 const blankEntry = { plateforme: '', email: '', mdp: '', site: '', notes: '', totp_secret: '', icon_url: '', tags: [] }
 const defaultGenerator = { length: 20, numbers: true, symbols: true, readable: false }
+const GENERATOR_MIN = 8
+const GENERATOR_MAX = 64
+const generatorToggles = [
+  { key: 'numbers', id: 'generator-numbers', label: 'Chiffres', hint: '0–9' },
+  { key: 'symbols', id: 'generator-symbols', label: 'Symboles', hint: '!@#$' },
+  { key: 'readable', id: 'generator-readable', label: 'Lisible', hint: 'Sans 0/O, 1/l' },
+]
 const pendingStrength = { level: 'medium', label: 'Analyse', score: 0, suggestions: [] }
 
 export function EntryDrawer({ open, entry, onClose, onSave, onGenerate }) {
@@ -18,6 +25,7 @@ export function EntryDrawer({ open, entry, onClose, onSave, onGenerate }) {
   const [iconPreview, setIconPreview] = useState(siteIconFallback('', ''))
   const [strength, setStrength] = useState(pendingStrength)
   const [tagDraft, setTagDraft] = useState('')
+  const [iconLoading, setIconLoading] = useState(false)
   const iconRequest = useRef(0)
 
   useEffect(() => {
@@ -34,26 +42,37 @@ export function EntryDrawer({ open, entry, onClose, onSave, onGenerate }) {
 
   useEffect(() => {
     const normalizedSite = normalizeSiteUrl(form.site)
-    if (!open || !normalizedSite) return undefined
     const requestId = iconRequest.current + 1
     iconRequest.current = requestId
+    if (!open) return undefined
+    if (!normalizedSite) {
+      setIconLoading(false)
+      if (!form.site.trim()) update('icon_url', '')
+      return undefined
+    }
+    // L’icône enregistrée reste valable tant que le site n’a pas changé.
+    if (entry?.icon_url && normalizeSiteUrl(entry.site) === normalizedSite) {
+      setIconLoading(false)
+      return undefined
+    }
+    setIconLoading(true)
     const timer = setTimeout(async () => {
       try {
         const result = await tauri.invoke('resoudre_icone_site', { site: normalizedSite, service: form.plateforme })
-        if (iconRequest.current !== requestId) return
-        const fallback = siteIconFallback(normalizedSite, form.plateforme)
-        update('icon_url', result?.iconUrl || '')
-        setIconPreview({
-          iconUrl: result?.iconUrl || '',
-          source: result?.source || fallback.source,
-          fallbackLabel: result?.fallbackLabel || fallback.fallbackLabel,
-        })
+        if (iconRequest.current === requestId) update('icon_url', result?.iconUrl || '')
       } catch (_) {
-        if (iconRequest.current === requestId) setIconPreview(siteIconFallback(form.site, form.plateforme))
+        if (iconRequest.current === requestId) update('icon_url', '')
+      } finally {
+        if (iconRequest.current === requestId) setIconLoading(false)
       }
-    }, 260)
+    }, 450)
     return () => clearTimeout(timer)
-  }, [form.site, form.plateforme, open])
+  }, [form.site, open])
+
+  function onIconError() {
+    update('icon_url', '')
+    setIconPreview(siteIconFallback(form.site, form.plateforme))
+  }
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }))
@@ -87,6 +106,11 @@ export function EntryDrawer({ open, entry, onClose, onSave, onGenerate }) {
     } finally {
       setSaving(false)
     }
+  }
+
+  function setLength(value) {
+    const length = Math.min(GENERATOR_MAX, Math.max(GENERATOR_MIN, Number(value) || GENERATOR_MIN))
+    setGenerator((current) => ({ ...current, length }))
   }
 
   async function generate() {
@@ -149,23 +173,32 @@ export function EntryDrawer({ open, entry, onClose, onSave, onGenerate }) {
                 <Sparkles size={16} /> Générer un mot de passe
               </button>
               <fieldset className="generator-options">
-                <legend className="sr-only">Options du generateur</legend>
+                <legend className="sr-only">Options du générateur</legend>
                 <label className="generator-length-row" htmlFor="generator-length">
-                  <span>Longueur</span><output id="generator-length-value">{generator.length}</output>
+                  <span>Longueur</span><output id="generator-length-value" htmlFor="generator-length">{generator.length}</output>
                 </label>
-                <input id="generator-length" type="range" min="8" max="64" value={generator.length} onChange={(event) => setGenerator((current) => ({ ...current, length: Number(event.target.value) }))} />
+                <div className="generator-length-control">
+                  <button type="button" className="generator-step" aria-label="Raccourcir d’un caractère" disabled={generator.length <= GENERATOR_MIN} onClick={() => setLength(generator.length - 1)}><Minus size={15} /></button>
+                  <input id="generator-length" type="range" min={GENERATOR_MIN} max={GENERATOR_MAX} value={generator.length} style={{ '--fill': `${((generator.length - GENERATOR_MIN) / (GENERATOR_MAX - GENERATOR_MIN)) * 100}%` }} onChange={(event) => setLength(event.target.value)} />
+                  <button type="button" className="generator-step" aria-label="Allonger d’un caractère" disabled={generator.length >= GENERATOR_MAX} onClick={() => setLength(generator.length + 1)}><Plus size={15} /></button>
+                </div>
                 <div className="generator-toggles">
-                  <label><input id="generator-numbers" type="checkbox" checked={generator.numbers} onChange={(event) => setGenerator((current) => ({ ...current, numbers: event.target.checked }))} /> Chiffres</label>
-                  <label><input id="generator-symbols" type="checkbox" checked={generator.symbols} onChange={(event) => setGenerator((current) => ({ ...current, symbols: event.target.checked }))} /> Symboles</label>
-                  <label><input id="generator-readable" type="checkbox" checked={generator.readable} onChange={(event) => setGenerator((current) => ({ ...current, readable: event.target.checked }))} /> Lisible</label>
+                  {generatorToggles.map(({ key, id, label, hint }) => (
+                    <label className="generator-chip" key={key} htmlFor={id}>
+                      <input id={id} type="checkbox" checked={generator[key]} onChange={(event) => setGenerator((current) => ({ ...current, [key]: event.target.checked }))} />
+                      <span className="generator-chip-check" aria-hidden="true"><Check size={12} strokeWidth={3} /></span>
+                      <span>{label}</span>
+                      <small>{hint}</small>
+                    </label>
+                  ))}
                 </div>
               </fieldset>
               <div className="strength-line"><span>Force : {strength.label}</span><span className={`strength-dot ${strength.level}`} style={{ '--strength-score': `${strength.score}%` }} /></div>
               {strength.suggestions.length > 0 && <p className="strength-advice">{strength.suggestions[0]}</p>}
               <label><span>Site web</span><input id="entry-site" type="text" inputMode="url" value={form.site} onChange={(event) => update('site', event.target.value)} placeholder="exemple.com ou https://exemple.com" /></label>
               <div className="site-icon-preview" aria-live="polite">
-                {iconPreview.iconUrl ? <img src={iconPreview.iconUrl} alt="" onError={() => update('icon_url', '')} /> : <span>{iconPreview.fallbackLabel}</span>}
-                <small>{iconPreview.iconUrl ? 'Icône du site détectée' : 'Icône par défaut'}</small>
+                {iconPreview.iconUrl ? <img src={iconPreview.iconUrl} alt="" onError={onIconError} /> : <span className={iconLoading ? 'is-loading' : undefined}>{iconPreview.fallbackLabel}</span>}
+                <small>{iconLoading ? 'Recherche de l’icône…' : iconPreview.iconUrl ? 'Icône du site détectée' : form.site.trim() ? 'Aucune icône trouvée : initiales utilisées' : 'Icône par défaut'}</small>
               </div>
               <label><span>Code 2FA / OTP</span><input id="entry-totp" value={form.totp_secret} onChange={(event) => update('totp_secret', event.target.value)} placeholder="Clé Base32 ou otpauth://" /></label>
               <div className="tag-field">

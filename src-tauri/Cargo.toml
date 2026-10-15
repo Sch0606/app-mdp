@@ -27,18 +27,20 @@ csv = "1"
 quick-xml = "0.39"
 url = "2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-biometry = "0.2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-process = "2"
 thiserror = "2"
 tiny_http = "0.12"
 tauri-plugin-opener = "2"
+psl = "2"
 
 [dev-dependencies]
 tempfile = "3"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -47,7 +49,7 @@ objc2-core-foundation = { version = "0.3.2", default-features = false, features 
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSDistributedNotificationCenter", "NSError", "NSNotification", "NSOperation", "NSString"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSWorkspace"] }
 block2 = "0.6.2"
-objc2-local-authentication = { version = "0.3.2", default-features = false, features = ["std", "LABiometryType", "LAContext", "LAError"] }
+objc2-local-authentication = { version = "0.3.2", default-features = false, features = ["std", "block2", "LABiometryType", "LAContext", "LAError"] }
 objc2-security = { version = "0.3.2", default-features = false, features = ["std", "SecAccessControl", "SecBase", "SecItem"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]

@@ -33,9 +33,9 @@ globalThis.fetch = async (url) => ({
 
 await import('../../browser-extension/service-worker.js')
 
-function send(message) {
+function send(message, url = message.payload?.origin || 'https://example.com/login') {
   return new Promise((resolve, reject) => {
-    const keptOpen = listener(message, { tab: { id: 42 } }, resolve)
+    const keptOpen = listener(message, { tab: { id: 42 }, url }, resolve)
     if (!keptOpen) reject(new Error('Le canal de réponse a été fermé.'))
   })
 }
@@ -103,4 +103,32 @@ test('une connexion en plusieurs écrans réunit l’identifiant puis le mot de 
     username: 'lea@example.fr',
     action: 'save',
   })
+})
+
+test('les requêtes de remplissage utilisent l’origine de l’expéditeur et refusent HTTP', async () => {
+  const calls = []
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = async (url, init) => {
+    calls.push(JSON.parse(init.body))
+    return { ok: true, async json() { return [] } }
+  }
+  try {
+    const ok = await new Promise((resolve) => listener(
+      { type: 'matches', payload: { origin: 'https://victime.example' } },
+      { tab: { id: 7 }, url: 'https://example.com/login' },
+      resolve,
+    ))
+    assert.equal(ok.ok, true)
+    assert.equal(calls.at(-1).origin, 'https://example.com')
+
+    const refused = await new Promise((resolve) => listener(
+      { type: 'credential', payload: { category: 'Perso', index: 0 } },
+      { tab: { id: 7 }, url: 'http://example.com/login' },
+      resolve,
+    ))
+    assert.equal(refused.ok, false)
+    assert.equal(refused.error.code, 'insecure_origin')
+  } finally {
+    globalThis.fetch = previousFetch
+  }
 })

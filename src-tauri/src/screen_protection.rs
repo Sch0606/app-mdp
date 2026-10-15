@@ -92,6 +92,10 @@ impl ScreenProtectionRuntime {
         let next = ScreenProtectionConfig { enabled };
         let raw = serde_json::to_string_pretty(&next)
             .map_err(|error| format!("Réglage illisible: {error}"))?;
+        if let Some(parent) = self.config_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("Enregistrement du réglage impossible: {error}"))?;
+        }
         fs::write(&self.config_path, raw)
             .map_err(|error| format!("Enregistrement du réglage impossible: {error}"))?;
         if let Ok(mut config) = self.config.lock() {

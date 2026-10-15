@@ -2,6 +2,8 @@ import { test, expect } from '@playwright/test'
 
 async function installTauri(page, options = {}) {
   await page.addInitScript((options) => {
+    // Ces scénarios décrivent le thème clair ; le thème sombre est le défaut de l’app.
+    if (localStorage.getItem('clave-dark-mode') === null) localStorage.setItem('clave-dark-mode', 'false')
     const vault = {
       Perso: [
         { plateforme: 'Banque', email: 'moi@example.fr', mdp: 'password', site: 'https://banque.fr', notes: '', totp_secret: '', tags: ['finances'], favorite: false, updated_at: 2_000_000 },

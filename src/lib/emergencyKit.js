@@ -35,40 +35,131 @@ export function formatRecoveryKeyLines(recoveryKey) {
   return [groups.slice(0, half).join('-'), groups.slice(half).join('-')].filter(Boolean)
 }
 
+// Rectangle aux coins arrondis (courbes de Bézier), à remplir (f) ou tracer (S).
+function roundedRect(x, y, width, height, radius, operator) {
+  const k = radius * 0.5523
+  return [
+    `${x + radius} ${y} m`,
+    `${x + width - radius} ${y} l`,
+    `${x + width - radius + k} ${y} ${x + width} ${y + radius - k} ${x + width} ${y + radius} c`,
+    `${x + width} ${y + height - radius} l`,
+    `${x + width} ${y + height - radius + k} ${x + width - radius + k} ${y + height} ${x + width - radius} ${y + height} c`,
+    `${x + radius} ${y + height} l`,
+    `${x + radius - k} ${y + height} ${x} ${y + height - radius + k} ${x} ${y + height - radius} c`,
+    `${x} ${y + radius} l`,
+    `${x} ${y + radius - k} ${x + radius - k} ${y} ${x + radius} ${y} c`,
+    operator,
+  ].join(' ')
+}
+
+const COLORS = {
+  accent: '0.086 0.298 0.243',
+  accentSoft: '0.93 0.97 0.95',
+  accentLine: '0.66 0.81 0.76',
+  mint: '0.45 0.88 0.75',
+  ink: '0.1 0.12 0.11',
+  muted: '0.4 0.45 0.43',
+  danger: '0.71 0.19 0.15',
+  dangerSoft: '0.99 0.94 0.93',
+  white: '1 1 1',
+}
+
 export function buildEmergencyKitPdf({ recoveryKey, createdAt = new Date() }) {
   if (!recoveryKey) throw new Error('Clé de récupération manquante.')
   const date = createdAt.toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })
   const keyLines = formatRecoveryKeyLines(recoveryKey)
-  const boxTop = 590
-  const boxHeight = 40 + keyLines.length * 30
+  const contentWidth = PAGE_WIDTH - MARGIN * 2
+
+  const keyBoxHeight = 56 + keyLines.length * 30
+  const keyBoxTop = 628
+  const keyBoxBottom = keyBoxTop - keyBoxHeight
+
+  const steps = [
+    'Sur l’écran de déverrouillage de Clave, cliquez sur « Mot de passe oublié ? ».',
+    'Saisissez la clé ci-dessus. Les tirets et les majuscules sont facultatifs.',
+    'Choisissez un nouveau mot de passe maître : vos données restent intactes.',
+  ]
+  const stepsTop = keyBoxBottom - 46
+  const tips = [
+    'Imprimez cette page et rangez-la avec vos documents importants.',
+    'Ne la conservez ni dans Clave, ni dans un e-mail, ni dans un cloud.',
+    'Une fois imprimé, supprimez ce PDF de votre ordinateur.',
+  ]
+  const tipsTop = stepsTop - steps.length * 30 - 40
+  const warningTop = tipsTop - tips.length * 20 - 24
+  const warningHeight = 52
+
   const commands = [
-    '0.11 0.37 0.29 rg',
-    textLine('F2', 24, MARGIN, 760, 'Kit de secours Clave'),
-    '0.33 0.38 0.36 rg',
-    textLine('F1', 11, MARGIN, 738, `Créé le ${date}`),
-    '0.1 0.12 0.11 rg',
-    textLine('F1', 12, MARGIN, 700, 'Cette clé permet de rouvrir votre coffre si vous oubliez le mot de passe maître.'),
-    textLine('F1', 12, MARGIN, 682, 'Elle est indépendante du mot de passe : la changer ne l’invalide pas.'),
-    textLine('F2', 12, MARGIN, 640, 'Clé de récupération'),
-    '0.93 0.97 0.95 rg',
-    `${MARGIN} ${boxTop - boxHeight} ${PAGE_WIDTH - MARGIN * 2} ${boxHeight} re f`,
-    '0.66 0.81 0.76 RG 1 w',
-    `${MARGIN} ${boxTop - boxHeight} ${PAGE_WIDTH - MARGIN * 2} ${boxHeight} re S`,
-    '0.05 0.2 0.15 rg',
-    ...keyLines.map((line, index) => textLine('F3', 20, MARGIN + 24, boxTop - 36 - index * 30, line)),
-    '0.1 0.12 0.11 rg',
-    textLine('F2', 12, MARGIN, 460, 'Comment l’utiliser'),
-    textLine('F1', 11, MARGIN, 438, '1. Sur l’écran de déverrouillage de Clave, choisissez « Mot de passe oublié ? ».'),
-    textLine('F1', 11, MARGIN, 420, '2. Saisissez la clé ci-dessus (tirets et majuscules facultatifs).'),
-    textLine('F1', 11, MARGIN, 402, '3. Définissez un nouveau mot de passe maître.'),
-    textLine('F2', 12, MARGIN, 360, 'Où la conserver'),
-    textLine('F1', 11, MARGIN, 338, '• Imprimez cette page et rangez-la dans un endroit sûr (coffre, dossier personnel).'),
-    textLine('F1', 11, MARGIN, 320, '• Ne l’enregistrez pas dans Clave, ni dans un e-mail ou un service en ligne.'),
-    textLine('F1', 11, MARGIN, 302, '• Supprimez ce fichier PDF de l’ordinateur une fois imprimé.'),
-    '0.71 0.19 0.15 rg',
-    textLine('F2', 11, MARGIN, 250, 'Toute personne possédant cette clé peut ouvrir votre coffre.'),
-    '0.45 0.5 0.48 rg',
-    textLine('F1', 9, MARGIN, 60, 'Clave · coffre local de mots de passe · générer un nouveau kit invalide celui-ci.'),
+    // En-tête
+    `${COLORS.accent} rg`,
+    `0 ${PAGE_HEIGHT - 128} ${PAGE_WIDTH} 128 re f`,
+    `${COLORS.mint} rg`,
+    `0 ${PAGE_HEIGHT - 132} ${PAGE_WIDTH} 4 re f`,
+    textLine('F2', 10, MARGIN, PAGE_HEIGHT - 52, 'CLAVE'),
+    `${COLORS.white} rg`,
+    textLine('F2', 26, MARGIN, PAGE_HEIGHT - 86, 'Kit de secours'),
+    `${COLORS.mint} rg`,
+    textLine('F1', 11, MARGIN, PAGE_HEIGHT - 108, `Créé le ${date} · Document confidentiel`),
+
+    // Introduction
+    `${COLORS.ink} rg`,
+    textLine('F1', 12, MARGIN, 670, 'Mot de passe maître oublié ? Cette clé vous permet de rouvrir votre coffre.'),
+    `${COLORS.muted} rg`,
+    textLine('F1', 11, MARGIN, 652, 'Elle ne dépend pas de votre mot de passe : le changer ne la rend pas invalide.'),
+
+    // Clé de récupération
+    `${COLORS.accentSoft} rg`,
+    roundedRect(MARGIN, keyBoxBottom, contentWidth, keyBoxHeight, 10, 'f'),
+    `${COLORS.accentLine} RG 1 w`,
+    roundedRect(MARGIN, keyBoxBottom, contentWidth, keyBoxHeight, 10, 'S'),
+    `${COLORS.accent} rg`,
+    roundedRect(MARGIN, keyBoxBottom, 6, keyBoxHeight, 3, 'f'),
+    textLine('F2', 9, MARGIN + 26, keyBoxTop - 24, 'CLÉ DE RÉCUPÉRATION'),
+    `${COLORS.ink} rg`,
+    ...keyLines.map((line, index) => textLine('F3', 21, MARGIN + 26, keyBoxTop - 56 - index * 30, line)),
+
+    // Étapes
+    `${COLORS.accent} rg`,
+    textLine('F2', 13, MARGIN, stepsTop, 'Retrouver l’accès à votre coffre'),
+    ...steps.flatMap((step, index) => {
+      const y = stepsTop - 30 - index * 30
+      return [
+        `${COLORS.accent} rg`,
+        roundedRect(MARGIN, y - 6, 20, 20, 10, 'f'),
+        `${COLORS.white} rg`,
+        textLine('F2', 11, MARGIN + 7, y, String(index + 1)),
+        `${COLORS.ink} rg`,
+        textLine('F1', 11, MARGIN + 32, y, step),
+      ]
+    }),
+
+    // Conseils de conservation
+    `${COLORS.accent} rg`,
+    textLine('F2', 13, MARGIN, tipsTop, 'Bien la conserver'),
+    ...tips.flatMap((tip, index) => {
+      const y = tipsTop - 24 - index * 20
+      return [
+        `${COLORS.mint} rg`,
+        `${MARGIN + 6} ${y + 2} 5 5 re f`,
+        `${COLORS.ink} rg`,
+        textLine('F1', 11, MARGIN + 22, y, tip),
+      ]
+    }),
+
+    // Avertissement
+    `${COLORS.dangerSoft} rg`,
+    roundedRect(MARGIN, warningTop - warningHeight, contentWidth, warningHeight, 8, 'f'),
+    `${COLORS.danger} rg`,
+    roundedRect(MARGIN, warningTop - warningHeight, 6, warningHeight, 3, 'f'),
+    textLine('F2', 11, MARGIN + 22, warningTop - 22, 'Gardez cette clé secrète.'),
+    textLine('F1', 10, MARGIN + 22, warningTop - 38, 'Toute personne qui la possède peut ouvrir votre coffre et lire vos mots de passe.'),
+
+    // Pied de page
+    `${COLORS.accentLine} RG 0.5 w`,
+    `${MARGIN} 78 m ${PAGE_WIDTH - MARGIN} 78 l S`,
+    `${COLORS.muted} rg`,
+    textLine('F1', 9, MARGIN, 60, 'Clave · gestionnaire de mots de passe local'),
+    textLine('F1', 9, PAGE_WIDTH - MARGIN - 181, 60, 'Générer un nouveau kit rend celui-ci invalide.'),
   ]
   const stream = commands.join('\n')
 

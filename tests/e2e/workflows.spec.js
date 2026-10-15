@@ -2,6 +2,8 @@ import { test, expect } from '@playwright/test'
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
+    // Ces scénarios décrivent le thème clair ; le thème sombre est le défaut de l’app.
+    if (localStorage.getItem('clave-dark-mode') === null) localStorage.setItem('clave-dark-mode', 'false')
     let vault = {
       Perso: [{ plateforme: 'Google', email: 'lea@example.fr', mdp: 'Secret-123!', site: 'https://google.com', notes: '', totp_secret: 'JBSWY3DPEHPK3PXP', favorite: false, updated_at: 2_000_000 }],
       Travail: [],
@@ -68,6 +70,7 @@ test.beforeEach(async ({ page }) => {
       }
       if (command === 'restaurer_historique' || command === 'restaurer_corbeille') return structuredClone(vault)
       if (command === 'generer_totp') return { code: '123456', remaining: 22 }
+      if (command === 'domaines_2fa') return ['github.com', 'google.com']
       if (command === 'resoudre_icone_site') {
         if (args.site?.includes('aternos.org')) return { iconUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=', source: 'favicon', fallbackLabel: 'AT' }
         return { iconUrl: 'https://google.com/favicon.ico', source: 'favicon', fallbackLabel: 'GO' }
@@ -240,13 +243,22 @@ test('affiche une vraie sante du coffre avec conseils actionnables', async ({ pa
   await page.locator('#new-access').click()
   await page.locator('#plateforme').fill('Ancien sans 2FA')
   await page.locator('#mdp').fill('abc')
+  await page.locator('#entry-site').fill('gist.github.com')
+  await page.locator('.btn-ajouter').click()
+  await page.locator('#new-access').click()
+  await page.locator('#plateforme').fill('Forum sans 2FA')
+  await page.locator('#mdp').fill('Long-secret-42!Unique')
+  await page.locator('#entry-site').fill('forum.example.org')
   await page.locator('.btn-ajouter').click()
 
   await page.getByRole('tab', { name: 'Santé' }).click()
   await expect(page.getByRole('heading', { name: 'Mots de passe faibles' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Entrées sans 2FA' })).toBeVisible()
+  const twoFactorCard = page.locator('.health-card').filter({ has: page.getByRole('heading', { name: '2FA disponible mais inactive' }) })
+  await expect(twoFactorCard.locator('header strong')).toHaveText('1')
+  await expect(twoFactorCard).toContainText('Ancien sans 2FA')
+  await expect(twoFactorCard).not.toContainText('Forum sans 2FA')
   await expect(page.getByRole('heading', { name: 'Entrées sans site web' })).toBeVisible()
-  await page.getByRole('button', { name: /Ancien sans 2FA/ }).first().click()
+  await twoFactorCard.getByRole('button', { name: /Ancien sans 2FA/ }).click()
   await expect(page.locator('.entry-drawer')).toBeVisible()
 })
 

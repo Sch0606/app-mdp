@@ -2,6 +2,8 @@ import { test, expect } from '@playwright/test'
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
+    // Ces scénarios décrivent le thème clair ; le thème sombre est le défaut de l’app.
+    if (localStorage.getItem('clave-dark-mode') === null) localStorage.setItem('clave-dark-mode', 'false')
     const vault = { Perso: [] }
     const invoke = async (command, args = {}) => {
       if (command === 'auth_status') return { configured: true, unlocked: true }
@@ -122,6 +124,19 @@ test('hiérarchise les actions sans empiler les grands blocs', async ({ page }) 
   expect(mainPaddingTop).toBeLessThanOrEqual(36)
   expect(lockWidth).toBeLessThanOrEqual(44)
   expect(listGap).toBeLessThanOrEqual(10)
+})
+
+test('utilise le thème sombre par défaut et permet de repasser en clair', async ({ page }) => {
+  await page.addInitScript(() => localStorage.removeItem('clave-dark-mode'))
+  await page.reload()
+  await expect(page.locator('[data-testid="clave-app"]')).toHaveAttribute('data-theme', 'dark')
+
+  await page.locator('#settings-button').click()
+  await page.getByRole('button', { name: 'Interface' }).click()
+  await page.locator('#toggle-dark-mode').uncheck()
+
+  await expect(page.locator('[data-testid="clave-app"]')).toHaveAttribute('data-theme', 'light')
+  expect(await page.evaluate(() => localStorage.getItem('clave-dark-mode'))).toBe('false')
 })
 
 test('active le mode sombre depuis les parametres interface', async ({ page }) => {

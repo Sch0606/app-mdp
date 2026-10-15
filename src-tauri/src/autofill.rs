@@ -111,7 +111,9 @@ fn fresh_token() -> String {
         .collect()
 }
 
-/// Hébergeurs partagés : chaque sous-domaine appartient à un propriétaire différent.
+/// Hébergeurs multi-locataires : chaque sous-domaine appartient à un propriétaire
+/// différent. Ils figurent déjà dans la section privée de la Public Suffix List ;
+/// cette liste sert de seconde barrière et impose une correspondance d’hôte exacte.
 const SHARED_HOSTING_SUFFIXES: &[&str] = &[
     "github.io",
     "gitlab.io",
@@ -128,11 +130,16 @@ const SHARED_HOSTING_SUFFIXES: &[&str] = &[
     "cloudfront.net",
     "onrender.com",
     "fly.dev",
-];
-
-/// Suffixes de second niveau courants des domaines nationaux (`co.uk`, `com.br`…).
-const SECOND_LEVEL_LABELS: &[&str] = &[
-    "ac", "co", "com", "edu", "gouv", "gov", "go", "ne", "net", "or", "org",
+    "amazonaws.com",
+    "s3.amazonaws.com",
+    "wixsite.com",
+    "myshopify.com",
+    "wordpress.com",
+    "sharepoint.com",
+    "glitch.me",
+    "replit.app",
+    "ngrok.io",
+    "ngrok-free.app",
 ];
 
 /// Services dont la connexion se fait sur un autre domaine que le service lui-même.
@@ -147,6 +154,24 @@ const SIGN_IN_ALIASES: &[(&str, &str)] = &[
     ("icloud.com", "apple.com"),
 ];
 
+fn host_of(url: &Url) -> Result<String, String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| "Domaine introuvable.".to_string())?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if host.is_empty() {
+        return Err("Domaine introuvable.".to_string());
+    }
+    Ok(host.strip_prefix("www.").unwrap_or(&host).to_string())
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1") || host.ends_with(".localhost")
+}
+
+/// Hôte d’une entrée du coffre (le schéma n’est pas imposé : une entrée saisie
+/// sans `https://` reste utilisable, mais seule une page HTTPS pourra la recevoir).
 fn normalized_host(value: &str) -> Result<String, String> {
     let trimmed = value.trim();
     let with_scheme = if trimmed.contains("://") {
@@ -158,53 +183,77 @@ fn normalized_host(value: &str) -> Result<String, String> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err("Origine non prise en charge.".to_string());
     }
-    let host = url
-        .host_str()
-        .ok_or_else(|| "Domaine introuvable.".to_string())?
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
-    Ok(host.strip_prefix("www.").unwrap_or(&host).to_string())
+    host_of(&url)
 }
 
-fn registrable_domain(host: &str) -> String {
-    let is_ip = host.contains(':') || host.chars().all(|c| c.is_ascii_digit() || c == '.');
-    let labels: Vec<&str> = host.split('.').collect();
-    if is_ip || labels.len() < 2 {
-        return host.to_string();
+/// Hôte d’une page qui demande un remplissage. Seules les origines HTTPS sont
+/// acceptées : une page HTTP peut être modifiée par n’importe quel intermédiaire
+/// réseau et exfiltrer le mot de passe rempli. `http://localhost` n’est toléré
+/// que dans les compilations de développement.
+fn requested_host(origin: &str) -> Result<String, String> {
+    let url = Url::parse(origin.trim()).map_err(|_| "Origine invalide.".to_string())?;
+    let host = host_of(&url)?;
+    match url.scheme() {
+        "https" => Ok(host),
+        "http" if cfg!(debug_assertions) && is_loopback_host(&host) => Ok(host),
+        _ => Err("Le remplissage est réservé aux pages HTTPS.".to_string()),
     }
-    let keep = if let Some(suffix) = SHARED_HOSTING_SUFFIXES
-        .iter()
-        .find(|suffix| host == **suffix || host.ends_with(&format!(".{suffix}")))
-    {
-        suffix.split('.').count() + 1
-    } else if labels.len() >= 3
-        && labels[labels.len() - 1].len() == 2
-        && SECOND_LEVEL_LABELS.contains(&labels[labels.len() - 2])
-    {
-        3
-    } else {
-        2
-    };
-    labels[labels.len().saturating_sub(keep)..].join(".")
 }
 
-fn site_key(host: &str) -> String {
-    let domain = registrable_domain(host);
-    SIGN_IN_ALIASES
+fn is_ip_literal(host: &str) -> bool {
+    host.starts_with('[') || host.contains(':') || host.parse::<std::net::Ipv4Addr>().is_ok()
+}
+
+fn on_shared_hosting(host: &str) -> bool {
+    SHARED_HOSTING_SUFFIXES
         .iter()
-        .find(|(alias, _)| *alias == domain)
-        .map(|(_, canonical)| canonical.to_string())
-        .unwrap_or(domain)
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+/// Domaine enregistrable selon la Public Suffix List (sections ICANN et privée).
+/// Renvoie `None` quand l’hôte est lui-même un suffixe public, une adresse IP ou
+/// un nom sans suffixe connu : seul l’hôte exact peut alors correspondre.
+fn registrable_domain(host: &str) -> Option<String> {
+    if is_ip_literal(host) || !host.contains('.') {
+        return None;
+    }
+    let suffix = psl::suffix(host.as_bytes())?;
+    if !suffix.is_known() {
+        return None;
+    }
+    let domain = psl::domain(host.as_bytes())?;
+    std::str::from_utf8(domain.as_bytes())
+        .ok()
+        .map(str::to_string)
+}
+
+fn site_key(host: &str) -> Option<String> {
+    let domain = registrable_domain(host)?;
+    Some(
+        SIGN_IN_ALIASES
+            .iter()
+            .find(|(alias, _)| *alias == domain)
+            .map(|(_, canonical)| canonical.to_string())
+            .unwrap_or(domain),
+    )
 }
 
 /// Un compte correspond au même hôte, ou au même domaine enregistrable
-/// (`mail.google.com` ↔ `accounts.google.com`), jamais à un domaine voisin.
+/// (`mail.google.com` ↔ `accounts.google.com`), jamais à un domaine voisin ni à un
+/// autre locataire d’un hébergeur partagé.
 fn site_matches(entry_site: &str, requested_host: &str) -> bool {
-    match normalized_host(entry_site) {
-        Ok(entry_host) => {
-            entry_host == requested_host || site_key(&entry_host) == site_key(requested_host)
-        }
-        Err(_) => false,
+    let Ok(entry_host) = normalized_host(entry_site) else {
+        return false;
+    };
+    if entry_host == requested_host {
+        return true;
+    }
+    if on_shared_hosting(&entry_host) || on_shared_hosting(requested_host) {
+        return false;
+    }
+    match (site_key(&entry_host), site_key(requested_host)) {
+        (Some(entry), Some(requested)) => entry == requested,
+        _ => false,
     }
 }
 
@@ -212,7 +261,7 @@ pub fn matching_accounts(
     categories: &CategoryMap,
     origin: &str,
 ) -> Result<Vec<AutofillAccount>, String> {
-    let requested_host = normalized_host(origin)?;
+    let requested_host = requested_host(origin)?;
     let mut matches = Vec::new();
 
     for (category, entries) in categories {
@@ -258,7 +307,7 @@ pub fn credential_for(
     category: &str,
     index: usize,
 ) -> Result<AutofillCredential, String> {
-    let requested_host = normalized_host(origin)?;
+    let requested_host = requested_host(origin)?;
     let entry = categories
         .get(category)
         .and_then(|entries| entries.get(index))
@@ -277,7 +326,7 @@ fn canonical_candidate_origin(value: &str) -> Result<(String, String), String> {
     if url.scheme() != "https" {
         return Err("Seules les connexions HTTPS peuvent être enregistrées.".to_string());
     }
-    let host = normalized_host(value)?;
+    let host = host_of(&url)?;
     url.set_path("/");
     url.set_query(None);
     url.set_fragment(None);
@@ -349,7 +398,7 @@ pub fn save_candidate(
                 .add_password(
                     "Remplissage automatique".to_string(),
                     crate::store::PasswordEntry {
-                        plateforme: registrable_domain(&host),
+                        plateforme: registrable_domain(&host).unwrap_or_else(|| host.clone()),
                         email: candidate.username.trim().to_string(),
                         mdp: candidate.password.clone(),
                         site,
@@ -868,6 +917,58 @@ mod tests {
             .unwrap(),
             CandidateAction::Saved
         );
+    }
+
+    #[test]
+    fn refuses_to_fill_on_plain_http_pages() {
+        assert!(matching_accounts(&vault(), "http://github.com/").is_err());
+        assert!(credential_for(&vault(), "http://github.com/", "Personnel", 0).is_err());
+        assert!(matching_accounts(&vault(), "ftp://github.com/").is_err());
+        assert!(matching_accounts(&vault(), "github.com").is_err());
+    }
+
+    #[test]
+    fn uses_the_public_suffix_list_for_registrable_domains() {
+        let vault = BTreeMap::from([(
+            "Perso".to_string(),
+            vec![
+                PasswordEntry {
+                    plateforme: "Banque".into(),
+                    email: "lea@example.fr".into(),
+                    mdp: "uk".into(),
+                    site: "https://bank.example.co.uk/".into(),
+                    ..PasswordEntry::default()
+                },
+                PasswordEntry {
+                    plateforme: "Mairie".into(),
+                    email: "lea@example.fr".into(),
+                    mdp: "jp".into(),
+                    site: "https://city.kawasaki.jp/".into(),
+                    ..PasswordEntry::default()
+                },
+                PasswordEntry {
+                    plateforme: "Boutique".into(),
+                    email: "lea@example.fr".into(),
+                    mdp: "shop".into(),
+                    site: "https://lea.myshopify.com/".into(),
+                    ..PasswordEntry::default()
+                },
+            ],
+        )]);
+        assert_eq!(
+            matching_accounts(&vault, "https://login.example.co.uk/").unwrap().len(),
+            1
+        );
+        assert!(matching_accounts(&vault, "https://other.co.uk/").unwrap().is_empty());
+        assert!(matching_accounts(&vault, "https://other.kawasaki.jp/")
+            .unwrap()
+            .is_empty());
+        assert!(matching_accounts(&vault, "https://attacker.myshopify.com/")
+            .unwrap()
+            .is_empty());
+        assert!(matching_accounts(&vault, "https://evil.s3.amazonaws.com/")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

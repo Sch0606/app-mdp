@@ -49,6 +49,18 @@ function canonicalOrigin(value) {
   }
 }
 
+// L’origine vient toujours de Chrome (expéditeur du message), jamais du contenu
+// fourni par la page, et seules les pages HTTPS sont servies.
+function senderOrigin(sender) {
+  const origin = canonicalOrigin(sender?.origin || sender?.url || '')
+  if (!origin) throw { code: 'insecure_origin', message: 'Clave ne remplit que les pages HTTPS.' }
+  return origin
+}
+
+function withSenderOrigin(payload, sender) {
+  return { ...(payload || {}), origin: senderOrigin(sender) }
+}
+
 async function clearPending(key) {
   await chrome.storage.session.remove(key)
 }
@@ -65,7 +77,7 @@ async function readPending(key) {
 
 async function handleMessage(message, sender) {
   if (message.type === 'stage-username') {
-    const origin = canonicalOrigin(message.payload?.origin)
+    const origin = senderOrigin(sender)
     const username = String(message.payload?.username || '').trim()
     const createdAt = Number(message.payload?.createdAt)
     if (!origin || !username || !isCandidateFresh({ createdAt }, Date.now(), 300_000)) {
@@ -79,14 +91,14 @@ async function handleMessage(message, sender) {
     const key = usernameKey(sender)
     const stored = await chrome.storage.session.get(key)
     const remembered = stored[key]
-    const origin = canonicalOrigin(message.payload?.origin)
+    const origin = senderOrigin(sender)
     const rememberedUsername = remembered
       && isCandidateFresh(remembered, Date.now(), 300_000)
       && remembered.origin === origin
       ? remembered.username
       : ''
     const candidate = buildCredentialCandidate(
-      message.payload?.origin,
+      origin,
       message.payload?.username || rememberedUsername,
       message.payload?.password,
       message.payload?.createdAt,
@@ -134,8 +146,12 @@ async function handleMessage(message, sender) {
     return { dismissed: true }
   }
 
-  if (['status', 'matches', 'credential', 'focus'].includes(message.type)) {
-    return callApi(message.type, message.payload || {})
+  if (['status', 'focus'].includes(message.type)) {
+    return callApi(message.type, {})
+  }
+
+  if (['matches', 'credential'].includes(message.type)) {
+    return callApi(message.type, withSenderOrigin(message.payload, sender))
   }
 
   throw { code: 'unknown_message', message: 'Action Clave inconnue.' }
