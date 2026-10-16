@@ -28,3 +28,14 @@ jobs:
       - run: npm run check
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+
+  macos:
+    # Le code Touch ID (macos_biometry.rs) n'est compilé que sur macOS.
+    name: macOS Rust checks
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: mkdir -p dist
+      - run: cargo test --manifest-path src-tauri/Cargo.toml

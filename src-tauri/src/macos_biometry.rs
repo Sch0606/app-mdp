@@ -33,6 +33,9 @@ const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34018;
 /// errSecInteractionNotAllowed: returned for a biometry-protected item when
 /// the authentication UI is skipped, which proves that the item exists.
 const ERR_SEC_INTERACTION_NOT_ALLOWED: i32 = -25308;
+/// errSecAuthFailed: the biometric access control no longer matches the
+/// enrolled fingerprints.
+const ERR_SEC_AUTH_FAILED: i32 = -25293;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Keychain {
@@ -121,7 +124,12 @@ fn evaluate_touch_id(context: &LAContext) -> Result<(), String> {
     match receiver.recv_timeout(Duration::from_secs(120)) {
         Ok(Ok(())) => Ok(()),
         Ok(Err(code)) => Err(local_auth_error_message(code)),
-        Err(_) => Err(local_auth_error_message(-4)),
+        Err(_) => {
+            // Dismisses the prompt left on screen, which would otherwise keep
+            // waiting for a fingerprint nobody listens for.
+            unsafe { context.invalidate() };
+            Err(local_auth_error_message(-4))
+        }
     }
 }
 
@@ -322,8 +330,19 @@ pub fn load_password() -> Result<String, String> {
     for keychain in KEYCHAINS {
         match copy_password(keychain, &context) {
             Ok(password) => return Ok(password),
+            // Not found in this keychain: keep the status of the other one.
+            Err(status) if status == errSecItemNotFound => {}
             Err(status) => last_status = status,
         }
+    }
+
+    // Touch ID succeeded but the secret is unreadable: a BiometryCurrentSet item is
+    // invalidated for good when fingerprints change. Remove it so the interface
+    // offers to enable Touch ID again instead of failing on every unlock. A
+    // cancelled keychain prompt (-128) keeps the secret.
+    if last_status == ERR_SEC_AUTH_FAILED {
+        let _ = remove_password();
+        return Err("Le secret Touch ID n’est plus valide (empreintes modifiées ?). Déverrouillez avec votre mot de passe maître, puis réactivez Touch ID dans les réglages.".to_string());
     }
     Err(keychain_error_message(last_status))
 }
