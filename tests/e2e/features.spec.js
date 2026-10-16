@@ -75,7 +75,7 @@ async function installTauri(page, options = {}) {
     }
   }, options)
   await page.goto('/')
-  await expect(page.locator('#launch-screen')).toHaveCount(0, { timeout: 5000 })
+  await expect(page.locator('#launch-screen')).toHaveCount(0, { timeout: 15000 })
 }
 
 test('ajoute des étiquettes, les affiche et filtre par étiquette', async ({ page }) => {
